@@ -1,109 +1,149 @@
 import os
-import sqlite3
-from flask import Flask, g, redirect, render_template_string, request, url_for
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, g, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-DATABASE = "maintenance_stock.db"
 UPLOAD_FOLDER = "static/uploads"
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-
-def allowed_file(filename):
-  return (
-      "." in filename
-      and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-  )
+# Récupération de l'URL Neon depuis les variables d'environnement de Render
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 def get_db():
-  db = getattr(g, "_database", None)
-  if db is None:
-    db = g._database = sqlite3.connect(DATABASE)
-    db.row_factory = sqlite3.Row
-  return db
+    if "db" not in g:
+        g.db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return g.db
 
 
 @app.teardown_appcontext
 def close_connection(exception):
-  db = getattr(g, "_database", None)
-  if db is not None:
-    db.close()
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
 
 
 def init_db():
-  with app.app_context():
+    if not DATABASE_URL:
+        return
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    cursor = conn.cursor()
+    # Création automatique des tables si elles n'existent pas encore dans Neon
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS locations (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS equipment (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS articles (
+            id SERIAL PRIMARY KEY,
+            reference TEXT,
+            name TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            price REAL DEFAULT 0.0,
+            location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+            equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+            image_filename TEXT
+        );
+        CREATE TABLE IF NOT EXISTS movements (
+            id SERIAL PRIMARY KEY,
+            article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            reason TEXT,
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.close()
+    conn.close()
+
+
+# Initialisation de la base au démarrage de l'application
+with app.app_context():
+    init_db()
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/stock")
+def stock():
     db = get_db()
-    db.executescript("""
-            CREATE TABLE IF NOT EXISTS locations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS equipment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                location_id INTEGER,
-                FOREIGN KEY (location_id) REFERENCES locations (id) ON DELETE SET NULL
-            );
-            CREATE TABLE IF NOT EXISTS articles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                reference TEXT,
-                name TEXT NOT NULL,
-                quantity INTEGER NOT NULL,
-                price REAL DEFAULT 0.0,
-                is_estimated_price INTEGER DEFAULT 0,
-                min_threshold INTEGER DEFAULT 2,
-                location_id INTEGER,
-                equipment_id INTEGER,
-                image_filename TEXT,
-                FOREIGN KEY (location_id) REFERENCES locations (id) ON DELETE SET NULL,
-                FOREIGN KEY (equipment_id) REFERENCES equipment (id) ON DELETE SET NULL
-            );
-            CREATE TABLE IF NOT EXISTS movements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                article_id INTEGER,
-                type TEXT NOT NULL,
-                quantity INTEGER NOT NULL,
-                reason TEXT,
-                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (article_id) REFERENCES articles (id) ON DELETE CASCADE
-            );
-        """)
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM articles ORDER BY id DESC;")
+    articles = cursor.fetchall()
+    cursor.close()
+    return render_template("stock.html", articles=articles)
 
-    # Migrations automatiques
-    cursor_art = db.execute("PRAGMA table_info(articles)")
-    columns_art = [col["name"] for col in cursor_art.fetchall()]
-    if "image_filename" not in columns_art:
-      db.execute("ALTER TABLE articles ADD COLUMN image_filename TEXT")
-    if "price" not in columns_art:
-      db.execute("ALTER TABLE articles ADD COLUMN price REAL DEFAULT 0.0")
-    if "is_estimated_price" not in columns_art:
-      db.execute(
-          "ALTER TABLE articles ADD COLUMN is_estimated_price INTEGER DEFAULT 0"
-      )
 
-    cursor_eq = db.execute("PRAGMA table_info(equipment)")
-    columns_eq = [col["name"] for col in cursor_eq.fetchall()]
-    if "location_id" not in columns_eq:
-      db.execute("ALTER TABLE equipment ADD COLUMN location_id INTEGER")
+@app.route("/entry")
+def entry_form():
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM locations;")
+    locations = cursor.fetchall()
+    cursor.execute("SELECT * FROM equipment;")
+    equipment = cursor.fetchall()
+    cursor.close()
+    return render_template("entry.html", locations=locations, equipment=equipment)
 
+
+@app.route("/add", methods=["POST"])
+def add_article():
+    reference = request.form.get("reference")
+    name = request.form.get("name")
+    quantity = int(request.form.get("quantity", 0))
+    price = float(request.form.get("price", 0.0))
+    location_id = request.form.get("location_id") or None
+    equipment_id = request.form.get("equipment_id") or None
+
+    # Gestion sécurisée du fichier image
+    image_filename = None
+    file = request.files.get("image")
+    if file and file.filename:
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        image_filename = filename
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # Insertion sécurisée avec PostgreSQL (%s)
+    cursor.execute(
+        """
+        INSERT INTO articles (reference, name, quantity, price, location_id, equipment_id, image_filename)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            reference,
+            name,
+            quantity,
+            price,
+            location_id,
+            equipment_id,
+            image_filename,
+        ),
+    )
     db.commit()
+    cursor.close()
 
-    cur = db.execute("SELECT COUNT(*) FROM locations")
-    if cur.fetchone()[0] == 0:
-      db.executescript("""
-                INSERT INTO locations (name) VALUES ('Atelier Central'), ('Réserve Technique'), ('Van 1 - Intervention'), ('Local Chaudière');
-                INSERT INTO equipment (name, location_id) VALUES ('Chaudière Biomasse', 4), ('Centrale Traitement Air', 1), ('Surpresseur Eau', 2), ('Général / Divers', 1);
-                INSERT INTO articles (reference, name, quantity, price, is_estimated_price, min_threshold, location_id, equipment_id) VALUES 
-                ('FLT-50', 'Filtre à air 50x50', 4, 15.50, 0, 2, 1, 2),
-                ('CR-1200', 'Courroie SPA 1200', 1, 32.00, 1, 2, 2, 1),
-                ('SND-PT', 'Sonde PT100', 3, 45.00, 0, 1, 3, 1);
-            """)
-      db.commit()
+    return redirect(url_for("stock"))
 
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000, debug=True)
 
 # --- TEMPLATES HTML ---
 
@@ -140,7 +180,7 @@ LAYOUT_FOOTER = """
 </html>
 """
 
-# 1. PAGE D'ACCUEIL (Avec Synthèse & Inventaire Détaillé)
+# 1. PAGE D'ACCUEIL
 HOME_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -228,7 +268,7 @@ HOME_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# 2. PAGE SYNTHÈSE FINANCIÈRE (1er choix)
+# 2. PAGE SYNTHÈSE FINANCIÈRE
 SUMMARY_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -276,7 +316,7 @@ SUMMARY_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# 3. PAGE INVENTAIRE DÉTAILLÉ (2ème choix)
+# 3. PAGE INVENTAIRE DÉTAILLÉ
 DETAILED_INVENTORY_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -653,11 +693,13 @@ SETTINGS_TEMPLATE = (
 
 def calculate_total_stock_value(articles_list=None):
   db = get_db()
+  cur = db.cursor()
   if articles_list is None:
-    articles_list = db.execute(
-        "SELECT quantity, price FROM articles"
-    ).fetchall()
-  return sum((item["quantity"] * item["price"]) for item in articles_list)
+    cur.execute("SELECT quantity, price FROM articles")
+    articles_list = cur.fetchall()
+  return sum(
+      (item["quantity"] * (item["price"] or 0.0)) for item in articles_list
+  )
 
 
 @app.route("/")
@@ -669,23 +711,26 @@ def home():
 @app.route("/summary")
 def summary_view():
   db = get_db()
+  cur = db.cursor()
   total_val = calculate_total_stock_value()
 
-  summary_locations = db.execute("""
+  cur.execute("""
         SELECT l.name as location_name, SUM(a.quantity * a.price) as loc_value
         FROM locations l
         LEFT JOIN articles a ON a.location_id = l.id
         GROUP BY l.id, l.name
         ORDER BY loc_value DESC
-    """).fetchall()
+    """)
+  summary_locations = cur.fetchall()
 
-  summary_equipment = db.execute("""
+  cur.execute("""
         SELECT e.name as equipment_name, SUM(a.quantity * a.price) as eq_value
         FROM equipment e
         LEFT JOIN articles a ON a.equipment_id = e.id
         GROUP BY e.id, e.name
         ORDER BY eq_value DESC
-    """).fetchall()
+    """)
+  summary_equipment = cur.fetchall()
 
   return render_template_string(
       SUMMARY_TEMPLATE,
@@ -698,14 +743,16 @@ def summary_view():
 @app.route("/detailed_inventory")
 def detailed_inventory_view():
   db = get_db()
+  cur = db.cursor()
   total_val = calculate_total_stock_value()
-  articles = db.execute("""
+  cur.execute("""
         SELECT a.*, l.name as loc_name, e.name as eq_name 
         FROM articles a
         LEFT JOIN locations l ON a.location_id = l.id
         LEFT JOIN equipment e ON a.equipment_id = e.id
         ORDER BY a.name
-    """).fetchall()
+    """)
+  articles = cur.fetchall()
 
   return render_template_string(
       DETAILED_INVENTORY_TEMPLATE,
@@ -717,8 +764,11 @@ def detailed_inventory_view():
 @app.route("/entry")
 def entry_form():
   db = get_db()
-  locations = db.execute("SELECT * FROM locations").fetchall()
-  equipment = db.execute("SELECT * FROM equipment").fetchall()
+  cur = db.cursor()
+  cur.execute("SELECT * FROM locations")
+  locations = cur.fetchall()
+  cur.execute("SELECT * FROM equipment")
+  equipment = cur.fetchall()
   total_val = calculate_total_stock_value()
   return render_template_string(
       ENTRY_TEMPLATE,
@@ -731,13 +781,16 @@ def entry_form():
 @app.route("/exit")
 def exit_form():
   db = get_db()
-  articles = db.execute("""
+  cur = db.cursor()
+  cur.execute("""
         SELECT a.*, l.name as loc_name 
         FROM articles a 
         LEFT JOIN locations l ON a.location_id = l.id 
         ORDER BY a.name
-    """).fetchall()
-  equipment = db.execute("SELECT * FROM equipment").fetchall()
+    """)
+  articles = cur.fetchall()
+  cur.execute("SELECT * FROM equipment")
+  equipment = cur.fetchall()
   total_val = calculate_total_stock_value()
   return render_template_string(
       EXIT_TEMPLATE,
@@ -750,8 +803,11 @@ def exit_form():
 @app.route("/stock")
 def stock_view():
   db = get_db()
-  locations = db.execute("SELECT * FROM locations").fetchall()
-  equipment = db.execute("SELECT * FROM equipment").fetchall()
+  cur = db.cursor()
+  cur.execute("SELECT * FROM locations")
+  locations = cur.fetchall()
+  cur.execute("SELECT * FROM equipment")
+  equipment = cur.fetchall()
 
   search_query = request.args.get("search", "").strip()
   loc_filter = request.args.get("loc_filter")
@@ -767,17 +823,18 @@ def stock_view():
   params = []
 
   if search_query:
-    query += " AND (a.name LIKE ? OR a.reference LIKE ?)"
+    query += " AND (a.name ILIKE %s OR a.reference ILIKE %s)"
     params.extend([f"%{search_query}%", f"%{search_query}%"])
   if loc_filter:
-    query += " AND a.location_id = ?"
+    query += " AND a.location_id = %s"
     params.append(loc_filter)
   if eq_filter:
-    query += " AND a.equipment_id = ?"
+    query += " AND a.equipment_id = %s"
     params.append(eq_filter)
 
   query += " ORDER BY a.name"
-  articles = db.execute(query, params).fetchall()
+  cur.execute(query, params)
+  articles = cur.fetchall()
 
   filtered_total_val = calculate_total_stock_value(articles)
 
@@ -796,6 +853,7 @@ def stock_view():
 @app.route("/edit/<int:id>", methods=["GET", "POST"])
 def edit_article(id):
   db = get_db()
+  cur = db.cursor()
   if request.method == "POST":
     name = request.form["name"]
     reference = request.form["reference"]
@@ -811,11 +869,11 @@ def edit_article(id):
         filename = secure_filename(file.filename)
         filename = f"art_{os.urandom(4).hex()}_{filename}"
         file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        db.execute(
+        cur.execute(
             """
-                UPDATE articles SET name = ?, reference = ?, quantity = ?, price = ?, 
-                is_estimated_price = ?, location_id = ?, equipment_id = ?, image_filename = ? 
-                WHERE id = ?
+                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
+                is_estimated_price = %s, location_id = %s, equipment_id = %s, image_filename = %s 
+                WHERE id = %s
             """,
             (
                 name,
@@ -830,11 +888,11 @@ def edit_article(id):
             ),
         )
       else:
-        db.execute(
+        cur.execute(
             """
-                UPDATE articles SET name = ?, reference = ?, quantity = ?, price = ?, 
-                is_estimated_price = ?, location_id = ?, equipment_id = ? 
-                WHERE id = ?
+                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
+                is_estimated_price = %s, location_id = %s, equipment_id = %s 
+                WHERE id = %s
             """,
             (
                 name,
@@ -850,9 +908,12 @@ def edit_article(id):
     db.commit()
     return redirect(url_for("stock_view"))
 
-  article = db.execute("SELECT * FROM articles WHERE id = ?", (id,)).fetchone()
-  locations = db.execute("SELECT * FROM locations ORDER BY name").fetchall()
-  equipment = db.execute("SELECT * FROM equipment ORDER BY name").fetchall()
+  cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
+  article = cur.fetchone()
+  cur.execute("SELECT * FROM locations ORDER BY name")
+  locations = cur.fetchall()
+  cur.execute("SELECT * FROM equipment ORDER BY name")
+  equipment = cur.fetchall()
   total_val = calculate_total_stock_value()
   return render_template_string(
       EDIT_TEMPLATE,
@@ -866,7 +927,8 @@ def edit_article(id):
 @app.route("/delete/<int:id>", methods=["POST"])
 def delete_article(id):
   db = get_db()
-  db.execute("DELETE FROM articles WHERE id = ?", (id,))
+  cur = db.cursor()
+  cur.execute("DELETE FROM articles WHERE id = %s", (id,))
   db.commit()
   return redirect(url_for("stock_view"))
 
@@ -874,12 +936,14 @@ def delete_article(id):
 @app.route("/history")
 def history_view():
   db = get_db()
-  movements = db.execute("""
+  cur = db.cursor()
+  cur.execute("""
         SELECT m.*, a.name as article_name, a.reference 
         FROM movements m
         LEFT JOIN articles a ON m.article_id = a.id
         ORDER BY m.date DESC
-    """).fetchall()
+    """)
+  movements = cur.fetchall()
   total_val = calculate_total_stock_value()
   return render_template_string(
       HISTORY_TEMPLATE, movements=movements, total_stock_value=total_val
@@ -889,13 +953,16 @@ def history_view():
 @app.route("/settings")
 def settings_view():
   db = get_db()
-  locations = db.execute("SELECT * FROM locations ORDER BY name").fetchall()
-  equipment = db.execute("""
+  cur = db.cursor()
+  cur.execute("SELECT * FROM locations ORDER BY name")
+  locations = cur.fetchall()
+  cur.execute("""
         SELECT e.*, l.name as loc_name 
         FROM equipment e 
         LEFT JOIN locations l ON e.location_id = l.id 
         ORDER BY e.name
-    """).fetchall()
+    """)
+  equipment = cur.fetchall()
   total_val = calculate_total_stock_value()
   return render_template_string(
       SETTINGS_TEMPLATE,
@@ -908,9 +975,10 @@ def settings_view():
 @app.route("/add_location", methods=["POST"])
 def add_location():
   db = get_db()
+  cur = db.cursor()
   name = request.form["name"].strip()
   if name:
-    db.execute("INSERT INTO locations (name) VALUES (?)", (name,))
+    cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
     db.commit()
   return redirect(url_for("settings_view"))
 
@@ -918,7 +986,8 @@ def add_location():
 @app.route("/delete_location/<int:id>", methods=["POST"])
 def delete_location(id):
   db = get_db()
-  db.execute("DELETE FROM locations WHERE id = ?", (id,))
+  cur = db.cursor()
+  cur.execute("DELETE FROM locations WHERE id = %s", (id,))
   db.commit()
   return redirect(url_for("settings_view"))
 
@@ -926,11 +995,12 @@ def delete_location(id):
 @app.route("/add_equipment", methods=["POST"])
 def add_equipment():
   db = get_db()
+  cur = db.cursor()
   name = request.form["name"].strip()
   location_id = request.form["location_id"]
   if name and location_id:
-    db.execute(
-        "INSERT INTO equipment (name, location_id) VALUES (?, ?)",
+    cur.execute(
+        "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
         (name, location_id),
     )
     db.commit()
@@ -940,7 +1010,8 @@ def add_equipment():
 @app.route("/delete_equipment/<int:id>", methods=["POST"])
 def delete_equipment(id):
   db = get_db()
-  db.execute("DELETE FROM equipment WHERE id = ?", (id,))
+  cur = db.cursor()
+  cur.execute("DELETE FROM equipment WHERE id = %s", (id,))
   db.commit()
   return redirect(url_for("settings_view"))
 
@@ -948,6 +1019,7 @@ def delete_equipment(id):
 @app.route("/add", methods=["POST"])
 def add_article():
   db = get_db()
+  cur = db.cursor()
   name = request.form["name"]
   reference = request.form["reference"]
   quantity = int(request.form["quantity"])
@@ -965,10 +1037,10 @@ def add_article():
       filename = f"art_{os.urandom(4).hex()}_{filename}"
       file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
 
-  cursor = db.execute(
+  cur.execute(
       """
         INSERT INTO articles (name, reference, quantity, price, is_estimated_price, location_id, equipment_id, image_filename) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
       (
           name,
@@ -981,12 +1053,12 @@ def add_article():
           filename,
       ),
   )
-  article_id = cursor.lastrowid
+  article_id = cur.fetchone()["id"]
 
-  db.execute(
+  cur.execute(
       """
         INSERT INTO movements (article_id, type, quantity, reason) 
-        VALUES (?, 'ENTREE', ?, ?)
+        VALUES (%s, 'ENTREE', %s, %s)
     """,
       (article_id, quantity, reason),
   )
@@ -997,24 +1069,24 @@ def add_article():
 @app.route("/movement_exit", methods=["POST"])
 def movement_exit():
   db = get_db()
+  cur = db.cursor()
   article_id = request.form["article_id"]
   qty = int(request.form["qty"])
   reason = request.form["reason"]
 
-  item = db.execute(
-      "SELECT quantity FROM articles WHERE id = ?", (article_id,)
-  ).fetchone()
+  cur.execute("SELECT quantity FROM articles WHERE id = %s", (article_id,))
+  item = cur.fetchone()
   if item:
     current_qty = item["quantity"]
     new_qty = max(0, current_qty - qty)
 
-    db.execute(
-        "UPDATE articles SET quantity = ? WHERE id = ?", (new_qty, article_id)
+    cur.execute(
+        "UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, article_id)
     )
-    db.execute(
+    cur.execute(
         """
             INSERT INTO movements (article_id, type, quantity, reason) 
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """,
         (article_id, "SORTIE", qty, reason),
     )
@@ -1026,14 +1098,16 @@ def movement_exit():
 @app.route("/update/<int:id>", methods=["POST"])
 def update_quantity(id):
   db = get_db()
+  cur = db.cursor()
   action = request.form["action"]
-  item = db.execute("SELECT quantity FROM articles WHERE id = ?", (id,)).fetchone()
+  cur.execute("SELECT quantity FROM articles WHERE id = %s", (id,))
+  item = cur.fetchone()
   if item:
     current_qty = item["quantity"]
     new_qty = (
         current_qty + 1 if action == "plus" else max(0, current_qty - 1)
     )
-    db.execute("UPDATE articles SET quantity = ? WHERE id = ?", (new_qty, id))
+    cur.execute("UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, id))
     db.commit()
   return redirect(url_for("stock_view"))
 
