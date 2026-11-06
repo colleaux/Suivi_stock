@@ -1,6 +1,6 @@
 import os
 import psycopg
-from psycopg.extras import RealDictCursor
+from psycopg.rows import dict_row
 from flask import Flask, g, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 
@@ -17,7 +17,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db():
     if "db" not in g:
-        g.db = psycopg.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return g.db
 
 
@@ -31,9 +31,9 @@ def close_connection(exception):
 def init_db():
     if not DATABASE_URL:
         return
-    conn = psycopg.connect(DATABASE_URL)
+    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     conn.autocommit = True
-    cursor = conn.cursor()
+    cursor = conn.cursor(row_factory=dict_row)
     # Création automatique des tables si elles n'existent pas encore dans Neon
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS locations (
