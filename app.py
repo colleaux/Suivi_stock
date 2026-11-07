@@ -1,3 +1,4 @@
+import datetime
 import os
 import psycopg
 from psycopg.rows import dict_row
@@ -57,6 +58,10 @@ def init_db():
             quantity INTEGER NOT NULL,
             price REAL DEFAULT 0.0,
             is_estimated_price INTEGER DEFAULT 0,
+            min_threshold INTEGER DEFAULT 2,
+            supplier TEXT,
+            invoice_number TEXT,
+            entry_date DATE,
             location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
             equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
             image_filename TEXT
@@ -66,9 +71,20 @@ def init_db():
             article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
             type TEXT NOT NULL,
             quantity INTEGER NOT NULL,
+            supplier TEXT,
+            invoice_number TEXT,
             reason TEXT,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+    """)
+  # Mises à jour de sécurité si les tables existaient déjà
+  cursor.execute("""
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS min_threshold INTEGER DEFAULT 2;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS supplier TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS invoice_number TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS entry_date DATE;
+        ALTER TABLE movements ADD COLUMN IF NOT EXISTS supplier TEXT;
+        ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
     """)
   cursor.close()
   conn.close()
@@ -142,7 +158,7 @@ LAYOUT_FOOTER = """
 # --- 1. PAGE DE SAISIE DE DONNÉES ---
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
-    + """
+    + f"""
     <div class="max-w-3xl mx-auto space-y-6">
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 flex justify-between items-center">
             <div>
@@ -167,22 +183,26 @@ ENTRY_TEMPLATE = (
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div class="sm:col-span-2">
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Nom de l'article *</label>
-                                <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                                <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
-                                <input type="text" name="reference" placeholder="ex: REF-8840" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                                <input type="text" name="reference" placeholder="ex: REF-8840" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none">
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
                             <div>
-                                <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité ajoutée *</label>
-                                <input type="number" name="quantity" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none font-bold">
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité initiale *</label>
+                                <input type="number" name="quantity" value="1" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Stock Mini (Alerte) *</label>
+                                <input type="number" name="min_threshold" value="2" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold text-rose-600">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Prix unitaire (€)</label>
-                                <input type="number" step="0.01" name="price" value="0.00" required class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                                <input type="number" step="0.01" name="price" value="0.00" required class="w-full text-xs p-2.5 border border-slate-300 rounded">
                             </div>
                             <div class="flex items-end pb-2">
                                 <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
@@ -192,35 +212,46 @@ ENTRY_TEMPLATE = (
                             </div>
                         </div>
 
+                        <!-- Champs Fournisseur, Facture & Date d'entrée -->
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
+                                <input type="text" name="supplier" placeholder="ex: Rexel, Leroy Merlin..." class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">N° de facture</label>
+                                <input type="text" name="invoice_number" placeholder="ex: FAC-2026-99" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Date d'entrée</label>
+                                <input type="date" name="entry_date" value="{datetime.date.today().strftime('%Y-%m-%d')}" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
+                            </div>
+                        </div>
+
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement du stock</label>
-                                <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                                <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                     <option value="">-- Sélectionner un lieu --</option>
-                                    {% for loc in locations %}
+                                    {{% for loc in locations %}}
                                     <option value="{{ loc.id }}">{{ loc.name }}</option>
-                                    {% endfor %}
+                                    {{% endfor %}}
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Équipement associé</label>
-                                <select name="equipment_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                                <select name="equipment_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                     <option value="">-- Sélectionner une machine --</option>
-                                    {% for eq in equipment %}
+                                    {{% for eq in equipment %}}
                                     <option value="{{ eq.id }}">{{ eq.name }}</option>
-                                    {% endfor %}
+                                    {{% endfor %}}
                                 </select>
                             </div>
                         </div>
 
                         <div>
-                            <label class="block text-xs font-semibold text-slate-600 mb-1">Motif / Origine</label>
-                            <input type="text" name="reason" placeholder="ex: Livré par fournisseur" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
-                        </div>
-
-                        <div>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Photo de l'article</label>
-                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200">
+                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700">
                         </div>
 
                         <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
@@ -234,17 +265,17 @@ ENTRY_TEMPLATE = (
                 <!-- Section Sortie -->
                 <div class="space-y-4">
                     <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-amber-500"></span> Sortie de stock / Consommation
+                        <span class="w-2 h-2 rounded-full bg-amber-500"></span> Sortie de stock / Consommation (Date enregistrée automatiquement)
                     </h2>
 
                     <form action="/movement_exit" method="POST" class="space-y-4">
                         <div>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
-                            <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                            <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                 <option value="">-- Choisir une pièce --</option>
-                                {% for item in articles %}
+                                {{% for item in articles %}}
                                 <option value="{{ item.id }}">{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
-                                {% endfor %}
+                                {{% endfor %}}
                             </select>
                         </div>
 
@@ -260,7 +291,7 @@ ENTRY_TEMPLATE = (
                         </div>
 
                         <button type="submit" class="w-full bg-slate-700 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
-                            Enregistrer la Sortie
+                            Enregistrer la Sortie (Date automatique)
                         </button>
                     </form>
                 </div>
@@ -271,7 +302,7 @@ ENTRY_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# --- 2. PAGE DE SUIVI DES DONNÉES & TABLEAU DE BORD ---
+# --- 2. PAGE DE SUIVI DES DONNÉES ---
 STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -320,9 +351,10 @@ STOCK_TEMPLATE = (
                             <th class="p-3 border-r border-slate-800">Statut</th>
                             <th class="p-3 border-r border-slate-800">N° Article</th>
                             <th class="p-3 border-r border-slate-800">Nom de l'article</th>
+                            <th class="p-3 border-r border-slate-800">Fournisseur / Facture</th>
                             <th class="p-3 border-r border-slate-800">Emplacement</th>
-                            <th class="p-3 border-r border-slate-800">Équipement</th>
-                            <th class="p-3 border-r border-slate-800 text-right">Prix Unitaire</th>
+                            <th class="p-3 border-r border-slate-800 text-right">Prix Unit.</th>
+                            <th class="p-3 border-r border-slate-800 text-center">Stock Mini</th>
                             <th class="p-3 border-r border-slate-800 text-center">Quantité</th>
                             <th class="p-3 text-right">Valeur Totale</th>
                             <th class="p-3 text-center no-print">Actions</th>
@@ -330,9 +362,9 @@ STOCK_TEMPLATE = (
                     </thead>
                     <tbody class="divide-y divide-slate-200">
                         {% for item in articles %}
-                        <tr class="{% if item.quantity <= 2 %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
+                        <tr class="{% if item.quantity <= item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
                             <td class="p-3 font-bold border-r border-slate-200">
-                                {% if item.quantity <= 2 %}
+                                {% if item.quantity <= item.min_threshold %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
                                 {% else %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-semibold uppercase">OK</span>
@@ -345,10 +377,14 @@ STOCK_TEMPLATE = (
                                 <span class="text-[9px] text-amber-700 bg-amber-50 px-1 rounded ml-1 font-normal">(Est.)</span>
                                 {% endif %}
                             </td>
+                            <td class="p-3 text-slate-600 border-r border-slate-200">
+                                <div class="font-medium text-slate-900">{{ item.supplier or '-' }}</div>
+                                <div class="text-[10px] text-slate-400">Fac: {{ item.invoice_number or '-' }} (Entrée: {{ item.entry_date or '-' }})</div>
+                            </td>
                             <td class="p-3 text-slate-600 border-r border-slate-200">{{ item.loc_name or 'Non assigné' }}</td>
-                            <td class="p-3 text-slate-600 border-r border-slate-200">{{ item.eq_name or '-' }}</td>
                             <td class="p-3 text-right text-slate-700 border-r border-slate-200 font-mono">{{ "%.2f"|format(item.price) }} €</td>
-                            <td class="p-3 text-center font-bold text-slate-900 border-r border-slate-200">{{ item.quantity }}</td>
+                            <td class="p-3 text-center font-bold text-slate-600 border-r border-slate-200 bg-slate-50/50">{{ item.min_threshold }}</td>
+                            <td class="p-3 text-center font-extrabold text-slate-900 border-r border-slate-200">{{ item.quantity }}</td>
                             <td class="p-3 text-right font-bold text-slate-900 font-mono">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
                             <td class="p-3 text-center no-print">
                                 <div class="flex items-center justify-center gap-2">
@@ -369,7 +405,7 @@ STOCK_TEMPLATE = (
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="9" class="p-6 text-center text-slate-400 text-xs">Aucune donnée disponible dans le tableau.</td>
+                            <td colspan="10" class="p-6 text-center text-slate-400 text-xs">Aucune donnée disponible dans le tableau.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -404,10 +440,14 @@ EDIT_ARTICLE_TEMPLATE = (
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité *</label>
                         <input type="number" name="quantity" value="{{ article.quantity }}" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Stock Mini *</label>
+                        <input type="number" name="min_threshold" value="{{ article.min_threshold }}" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold text-rose-600">
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Prix Unitaire (€)</label>
@@ -418,6 +458,21 @@ EDIT_ARTICLE_TEMPLATE = (
                             <input type="checkbox" name="is_estimated_price" value="1" {% if article.is_estimated_price %}checked{% endif %} class="rounded border-slate-300 text-slate-900">
                             <span>Prix estimé</span>
                         </label>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
+                        <input type="text" name="supplier" value="{{ article.supplier or '' }}" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">N° de facture</label>
+                        <input type="text" name="invoice_number" value="{{ article.invoice_number or '' }}" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Date d'entrée</label>
+                        <input type="date" name="entry_date" value="{{ article.entry_date or '' }}" class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
                     </div>
                 </div>
 
@@ -458,7 +513,7 @@ EDIT_ARTICLE_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# --- 3. PAGE DE RÉGLAGES (GESTION LIEUX & ÉQUIPEMENTS) ---
+# --- 3. PAGE DE RÉGLAGES ---
 SETTINGS_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -650,8 +705,12 @@ def edit_article(id):
     name = request.form["name"].strip()
     reference = request.form.get("reference")
     quantity = int(request.form.get("quantity", 0))
+    min_threshold = int(request.form.get("min_threshold", 2))
     price = float(request.form.get("price") or 0.0)
     is_estimated_price = 1 if "is_estimated_price" in request.form else 0
+    supplier = request.form.get("supplier")
+    invoice_number = request.form.get("invoice_number")
+    entry_date = request.form.get("entry_date") or None
     location_id = request.form.get("location_id") or None
     equipment_id = request.form.get("equipment_id") or None
 
@@ -663,16 +722,20 @@ def edit_article(id):
         file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
         cur.execute(
             """
-                UPDATE articles SET name=%s, reference=%s, quantity=%s, price=%s, 
-                is_estimated_price=%s, location_id=%s, equipment_id=%s, image_filename=%s
+                UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s, 
+                is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s, equipment_id=%s, image_filename=%s
                 WHERE id=%s
             """,
             (
                 name,
                 reference,
                 quantity,
+                min_threshold,
                 price,
                 is_estimated_price,
+                supplier,
+                invoice_number,
+                entry_date,
                 location_id,
                 equipment_id,
                 filename,
@@ -682,16 +745,20 @@ def edit_article(id):
     else:
       cur.execute(
           """
-            UPDATE articles SET name=%s, reference=%s, quantity=%s, price=%s, 
-            is_estimated_price=%s, location_id=%s, equipment_id=%s
+            UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s, 
+            is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s, equipment_id=%s
             WHERE id=%s
         """,
           (
               name,
               reference,
               quantity,
+              min_threshold,
               price,
               is_estimated_price,
+              supplier,
+              invoice_number,
+              entry_date,
               location_id,
               equipment_id,
               id,
@@ -828,11 +895,15 @@ def add_article():
   name = request.form["name"]
   reference = request.form.get("reference")
   quantity = int(request.form.get("quantity", 1))
+  min_threshold = int(request.form.get("min_threshold", 2))
   price = float(request.form.get("price") or 0.0)
   is_estimated_price = 1 if "is_estimated_price" in request.form else 0
+  supplier = request.form.get("supplier")
+  invoice_number = request.form.get("invoice_number")
+  entry_date = request.form.get("entry_date") or datetime.date.today()
   location_id = request.form.get("location_id") or None
   equipment_id = request.form.get("equipment_id") or None
-  reason = request.form.get("reason") or "Entrée stock"
+  reason = f"Entrée - Fournisseur: {supplier or 'N/C'} | Facture: {invoice_number or 'N/C'}"
 
   filename = None
   if "photo" in request.files:
@@ -844,15 +915,19 @@ def add_article():
 
   cur.execute(
       """
-        INSERT INTO articles (name, reference, quantity, price, is_estimated_price, location_id, equipment_id, image_filename) 
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        INSERT INTO articles (name, reference, quantity, min_threshold, price, is_estimated_price, supplier, invoice_number, entry_date, location_id, equipment_id, image_filename) 
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
       (
           name,
           reference,
           quantity,
+          min_threshold,
           price,
           is_estimated_price,
+          supplier,
+          invoice_number,
+          entry_date,
           location_id,
           equipment_id,
           filename,
@@ -862,10 +937,10 @@ def add_article():
 
   cur.execute(
       """
-        INSERT INTO movements (article_id, type, quantity, reason) 
-        VALUES (%s, 'ENTREE', %s, %s)
+        INSERT INTO movements (article_id, type, quantity, supplier, invoice_number, reason, date) 
+        VALUES (%s, 'ENTREE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
     """,
-      (article_id, quantity, reason),
+      (article_id, quantity, supplier, invoice_number, reason),
   )
   db.commit()
   cur.close()
@@ -889,12 +964,13 @@ def movement_exit():
     cur.execute(
         "UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, article_id)
     )
+    # Enregistrement du mouvement de sortie avec horodatage automatique de la date de sortie (CURRENT_TIMESTAMP)
     cur.execute(
         """
-            INSERT INTO movements (article_id, type, quantity, reason) 
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO movements (article_id, type, quantity, reason, date) 
+            VALUES (%s, 'SORTIE', %s, %s, CURRENT_TIMESTAMP)
         """,
-        (article_id, "SORTIE", qty, reason),
+        (article_id, qty, reason),
     )
     db.commit()
   cur.close()
