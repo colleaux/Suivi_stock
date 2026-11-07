@@ -78,467 +78,7 @@ with app.app_context():
   init_db()
 
 
-# --- TEMPLATES HTML (Placeholders) ---
-HOME_TEMPLATE = ""
-SUMMARY_TEMPLATE = ""
-DETAILED_INVENTORY_TEMPLATE = ""
-ENTRY_TEMPLATE = ""
-EXIT_TEMPLATE = ""
-STOCK_TEMPLATE = ""
-EDIT_TEMPLATE = ""
-HISTORY_TEMPLATE = ""
-SETTINGS_TEMPLATE = ""
-
-
-# --- CALCUL GLOBAL ---
-
-
-def calculate_total_stock_value(articles_list=None):
-  db = get_db()
-  cur = db.cursor()
-  if articles_list is None:
-    cur.execute("SELECT quantity, price FROM articles")
-    articles_list = cur.fetchall()
-  cur.close()
-  return sum(
-      (item["quantity"] * (item["price"] or 0.0)) for item in articles_list
-  )
-
-
-# --- ROUTES UNIQUE ---
-
-
-@app.route("/")
-def home():
-  total_val = calculate_total_stock_value()
-  return render_template_string(HOME_TEMPLATE, total_stock_value=total_val)
-
-
-@app.route("/summary")
-def summary_view():
-  db = get_db()
-  cur = db.cursor()
-  total_val = calculate_total_stock_value()
-
-  cur.execute("""
-        SELECT l.name as location_name, SUM(a.quantity * a.price) as loc_value
-        FROM locations l
-        LEFT JOIN articles a ON a.location_id = l.id
-        GROUP BY l.id, l.name
-        ORDER BY loc_value DESC
-    """)
-  summary_locations = cur.fetchall()
-
-  cur.execute("""
-        SELECT e.name as equipment_name, SUM(a.quantity * a.price) as eq_value
-        FROM equipment e
-        LEFT JOIN articles a ON a.equipment_id = e.id
-        GROUP BY e.id, e.name
-        ORDER BY eq_value DESC
-    """)
-  summary_equipment = cur.fetchall()
-  cur.close()
-
-  return render_template_string(
-      SUMMARY_TEMPLATE,
-      total_stock_value=total_val,
-      summary_locations=summary_locations,
-      summary_equipment=summary_equipment,
-  )
-
-
-@app.route("/detailed_inventory")
-def detailed_inventory_view():
-  db = get_db()
-  cur = db.cursor()
-  total_val = calculate_total_stock_value()
-  cur.execute("""
-        SELECT a.*, l.name as loc_name, e.name as eq_name 
-        FROM articles a
-        LEFT JOIN locations l ON a.location_id = l.id
-        LEFT JOIN equipment e ON a.equipment_id = e.id
-        ORDER BY a.name
-    """)
-  articles = cur.fetchall()
-  cur.close()
-
-  return render_template_string(
-      DETAILED_INVENTORY_TEMPLATE,
-      total_stock_value=total_val,
-      articles=articles,
-  )
-
-
-@app.route("/entry")
-def entry_form():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("SELECT * FROM locations")
-  locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
-  equipment = cur.fetchall()
-  cur.close()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      ENTRY_TEMPLATE,
-      locations=locations,
-      equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/exit")
-def exit_form():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("""
-        SELECT a.*, l.name as loc_name 
-        FROM articles a 
-        LEFT JOIN locations l ON a.location_id = l.id 
-        ORDER BY a.name
-    """)
-  articles = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
-  equipment = cur.fetchall()
-  cur.close()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      EXIT_TEMPLATE,
-      articles=articles,
-      equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/stock")
-def stock_view():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("SELECT * FROM locations")
-  locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
-  equipment = cur.fetchall()
-
-  search_query = request.args.get("search", "").strip()
-  loc_filter = request.args.get("loc_filter")
-  eq_filter = request.args.get("eq_filter")
-
-  query = """
-        SELECT a.*, l.name as loc_name, e.name as eq_name 
-        FROM articles a
-        LEFT JOIN locations l ON a.location_id = l.id
-        LEFT JOIN equipment e ON a.equipment_id = e.id
-        WHERE 1=1
-    """
-  params = []
-
-  if search_query:
-    query += " AND (a.name ILIKE %s OR a.reference ILIKE %s)"
-    params.extend([f"%{search_query}%", f"%{search_query}%"])
-  if loc_filter:
-    query += " AND a.location_id = %s"
-    params.append(loc_filter)
-  if eq_filter:
-    query += " AND a.equipment_id = %s"
-    params.append(eq_filter)
-
-  query += " ORDER BY a.name"
-  cur.execute(query, params)
-  articles = cur.fetchall()
-  cur.close()
-
-  filtered_total_val = calculate_total_stock_value(articles)
-
-  return render_template_string(
-      STOCK_TEMPLATE,
-      locations=locations,
-      equipment=equipment,
-      articles=articles,
-      search_query=search_query,
-      current_loc=loc_filter,
-      current_eq=eq_filter,
-      total_stock_value=filtered_total_val,
-  )
-
-
-@app.route("/edit/<int:id>", methods=["GET", "POST"])
-def edit_article(id):
-  db = get_db()
-  cur = db.cursor()
-  if request.method == "POST":
-    name = request.form["name"]
-    reference = request.form["reference"]
-    quantity = int(request.form["quantity"])
-    price = float(request.form["price"] or 0.0)
-    is_estimated_price = 1 if "is_estimated_price" in request.form else 0
-    location_id = request.form["location_id"]
-    equipment_id = request.form["equipment_id"]
-
-    if "photo" in request.files:
-      file = request.files["photo"]
-      if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filename = f"art_{os.urandom(4).hex()}_{filename}"
-        file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        cur.execute(
-            """
-                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
-                is_estimated_price = %s, location_id = %s, equipment_id = %s, image_filename = %s 
-                WHERE id = %s
-            """,
-            (
-                name,
-                reference,
-                quantity,
-                price,
-                is_estimated_price,
-                location_id,
-                equipment_id,
-                filename,
-                id,
-            ),
-        )
-      else:
-        cur.execute(
-            """
-                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
-                is_estimated_price = %s, location_id = %s, equipment_id = %s 
-                WHERE id = %s
-            """,
-            (
-                name,
-                reference,
-                quantity,
-                price,
-                is_estimated_price,
-                location_id,
-                equipment_id,
-                id,
-            ),
-        )
-    db.commit()
-    cur.close()
-    return redirect(url_for("stock_view"))
-
-  cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
-  article = cur.fetchone()
-  cur.execute("SELECT * FROM locations ORDER BY name")
-  locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment ORDER BY name")
-  equipment = cur.fetchall()
-  cur.close()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      EDIT_TEMPLATE,
-      article=article,
-      locations=locations,
-      equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/delete/<int:id>", methods=["POST"])
-def delete_article(id):
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("DELETE FROM articles WHERE id = %s", (id,))
-  db.commit()
-  cur.close()
-  return redirect(url_for("stock_view"))
-
-
-@app.route("/history")
-def history_view():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("""
-        SELECT m.*, a.name as article_name, a.reference 
-        FROM movements m
-        LEFT JOIN articles a ON m.article_id = a.id
-        ORDER BY m.date DESC
-    """)
-  movements = cur.fetchall()
-  cur.close()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      HISTORY_TEMPLATE, movements=movements, total_stock_value=total_val
-  )
-
-
-@app.route("/settings")
-def settings_view():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("SELECT * FROM locations ORDER BY name")
-  locations = cur.fetchall()
-  cur.execute("""
-        SELECT e.*, l.name as loc_name 
-        FROM equipment e 
-        LEFT JOIN locations l ON e.location_id = l.id 
-        ORDER BY e.name
-    """)
-  equipment = cur.fetchall()
-  cur.close()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      SETTINGS_TEMPLATE,
-      locations=locations,
-      equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/add_location", methods=["POST"])
-def add_location():
-  db = get_db()
-  cur = db.cursor()
-  name = request.form["name"].strip()
-  if name:
-    cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
-    db.commit()
-  cur.close()
-  return redirect(url_for("settings_view"))
-
-
-@app.route("/delete_location/<int:id>", methods=["POST"])
-def delete_location(id):
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("DELETE FROM locations WHERE id = %s", (id,))
-  db.commit()
-  cur.close()
-  return redirect(url_for("settings_view"))
-
-
-@app.route("/add_equipment", methods=["POST"])
-def add_equipment():
-  db = get_db()
-  cur = db.cursor()
-  name = request.form["name"].strip()
-  location_id = request.form["location_id"]
-  if name and location_id:
-    cur.execute(
-        "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
-        (name, location_id),
-    )
-    db.commit()
-  cur.close()
-  return redirect(url_for("settings_view"))
-
-
-@app.route("/delete_equipment/<int:id>", methods=["POST"])
-def delete_equipment(id):
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("DELETE FROM equipment WHERE id = %s", (id,))
-  db.commit()
-  cur.close()
-  return redirect(url_for("settings_view"))
-
-
-@app.route("/add", methods=["POST"])
-def add_article():
-  db = get_db()
-  cur = db.cursor()
-  name = request.form["name"]
-  reference = request.form["reference"]
-  quantity = int(request.form["quantity"])
-  price = float(request.form["price"] or 0.0)
-  is_estimated_price = 1 if "is_estimated_price" in request.form else 0
-  location_id = request.form["location_id"]
-  equipment_id = request.form["equipment_id"]
-  reason = request.form.get("reason") or "Stock initial / Entrée"
-
-  filename = None
-  if "photo" in request.files:
-    file = request.files["photo"]
-    if file and allowed_file(file.filename):
-      filename = secure_filename(file.filename)
-      filename = f"art_{os.urandom(4).hex()}_{filename}"
-      file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-
-  cur.execute(
-      """
-        INSERT INTO articles (name, reference, quantity, price, is_estimated_price, location_id, equipment_id, image_filename) 
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-    """,
-      (
-          name,
-          reference,
-          quantity,
-          price,
-          is_estimated_price,
-          location_id,
-          equipment_id,
-          filename,
-      ),
-  )
-  article_id = cur.fetchone()["id"]
-
-  cur.execute(
-      """
-        INSERT INTO movements (article_id, type, quantity, reason) 
-        VALUES (%s, 'ENTREE', %s, %s)
-    """,
-      (article_id, quantity, reason),
-  )
-  db.commit()
-  cur.close()
-  return redirect(url_for("stock_view"))
-
-
-@app.route("/movement_exit", methods=["POST"])
-def movement_exit():
-  db = get_db()
-  cur = db.cursor()
-  article_id = request.form["article_id"]
-  qty = int(request.form["qty"])
-  reason = request.form["reason"]
-
-  cur.execute("SELECT quantity FROM articles WHERE id = %s", (article_id,))
-  item = cur.fetchone()
-  if item:
-    current_qty = item["quantity"]
-    new_qty = max(0, current_qty - qty)
-
-    cur.execute(
-        "UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, article_id)
-    )
-    cur.execute(
-        """
-            INSERT INTO movements (article_id, type, quantity, reason) 
-            VALUES (%s, %s, %s, %s)
-        """,
-        (article_id, "SORTIE", qty, reason),
-    )
-    db.commit()
-  cur.close()
-
-  return redirect(url_for("stock_view"))
-
-
-@app.route("/update/<int:id>", methods=["POST"])
-def update_quantity(id):
-  db = get_db()
-  cur = db.cursor()
-  action = request.form["action"]
-  cur.execute("SELECT quantity FROM articles WHERE id = %s", (id,))
-  item = cur.fetchone()
-  if item:
-    current_qty = item["quantity"]
-    new_qty = (
-        current_qty + 1 if action == "plus" else max(0, current_qty - 1)
-    )
-    cur.execute("UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, id))
-    db.commit()
-  cur.close()
-  return redirect(url_for("stock_view"))
-
-
-if __name__ == "__main__":
-  app.run(host="0.0.0.0", port=10000, debug=True)
-
-# --- TEMPLATES HTML ---
+# --- CHARTE GRAPHIQUE CORPORATE & LAYOUT UNIFIÉ ---
 
 LAYOUT_HEADER = """
 <!DOCTYPE html>
@@ -546,541 +86,386 @@ LAYOUT_HEADER = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Maintenance</title>
+    <title>Gestion & Suivi de Stock</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @media print {
-            body { background: white; color: black; font-size: 11px; }
             .no-print { display: none !important; }
-            .print-shadow { box-shadow: none !important; border: 1px solid #ccc !important; }
+            body { background: white !important; font-size: 11px; }
+            .print-table { border: 1px solid #CBD5E1 !important; }
         }
     </style>
 </head>
-<body class="bg-gray-100 text-gray-800 pb-16">
-    <div class="max-w-md mx-auto p-4">
-        <div class="flex justify-between items-center mb-4 bg-blue-600 text-white p-3 rounded-xl shadow no-print">
-            <div>
-                <h1 class="text-base font-bold">🛠️ Maintenance Stock</h1>
-                <p class="text-[11px] opacity-90 font-semibold text-emerald-200">💰 Valeur totale : {{ "%.2f"|format(total_stock_value or 0) }} €</p>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+
+    <!-- Header / Navbar Principal -->
+    <header class="bg-slate-900 text-white shadow-md border-b border-slate-800 no-print">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Branding -->
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 bg-slate-700 rounded-lg flex items-center justify-center font-bold text-slate-200">
+                        📦
+                    </div>
+                    <div>
+                        <a href="/" class="text-base font-bold tracking-tight text-white block">SUIVI INVENTAIRE</a>
+                        <span class="text-[10px] text-slate-400 font-medium">CAPITAL IMMOBILISÉ : {{ "%.2f"|format(total_stock_value or 0) }} €</span>
+                    </div>
+                </div>
+
+                <!-- Navigation 3 Liens Clés -->
+                <nav class="flex space-x-1 sm:space-x-2">
+                    <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        <span>✏️</span> Saisie
+                    </a>
+                    <a href="/stock" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'stock' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        <span>📊</span> Suivi & Rapport
+                    </a>
+                    <a href="/settings" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'settings' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        <span>⚙️</span> Réglages
+                    </a>
+                </nav>
             </div>
-            <a href="/" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg text-xs font-semibold shadow">🏠 Accueil</a>
         </div>
+    </header>
+
+    <!-- Content Container -->
+    <main class="flex-grow max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
 """
 
 LAYOUT_FOOTER = """
-    </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 text-slate-500 text-[11px] py-4 border-t border-slate-800 text-center no-print mt-auto">
+        Système de Gestion de Stock & Operations | Facility Management
+    </footer>
 </body>
 </html>
 """
 
-# 1. PAGE D'ACCUEIL
-HOME_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="space-y-3 mt-2">
-            <div class="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-4 rounded-xl shadow-md text-center">
-                <span class="text-xs uppercase tracking-wider text-blue-200 font-semibold">Capital Immobilisé Total</span>
-                <div class="text-2xl font-extrabold mt-1">{{ "%.2f"|format(total_stock_value or 0) }} €</div>
-            </div>
-
-            <div class="text-center my-2">
-                <h2 class="text-sm font-bold text-gray-700">Menu Principal</h2>
-            </div>
-
-            <a href="/entry" class="block bg-white border-2 border-emerald-500 p-3.5 rounded-xl shadow-md hover:bg-emerald-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-lg">➕</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-emerald-900">Saisie d'une Entrée</h3>
-                        <p class="text-[10px] text-gray-500">Réapprovisionner ou créer un article</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/exit" class="block bg-white border-2 border-amber-500 p-3.5 rounded-xl shadow-md hover:bg-amber-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center text-lg">➖</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-amber-900">Saisie d'une Sortie</h3>
-                        <p class="text-[10px] text-gray-500">Consommer une pièce pour intervention</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/stock" class="block bg-white border-2 border-blue-500 p-3.5 rounded-xl shadow-md hover:bg-blue-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center text-lg">📦</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-blue-900">État des Stocks</h3>
-                        <p class="text-[10px] text-gray-500">Consulter, filtrer, modifier ou supprimer</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/summary" class="block bg-white border-2 border-indigo-500 p-3.5 rounded-xl shadow-md hover:bg-indigo-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center text-lg">📊</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-indigo-900">1. Synthèse Financière (Par Lieu/Éq.)</h3>
-                        <p class="text-[10px] text-gray-500">Bilan global et totaux par zones & exports PDF</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/detailed_inventory" class="block bg-white border-2 border-teal-500 p-3.5 rounded-xl shadow-md hover:bg-teal-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-teal-100 text-teal-600 rounded-lg flex items-center justify-center text-lg">📋</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-teal-900">2. Inventaire Détaillé Complet</h3>
-                        <p class="text-[10px] text-gray-500">Liste complète article par article & export PDF</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/history" class="block bg-white border-2 border-purple-500 p-3.5 rounded-xl shadow-md hover:bg-purple-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center text-lg">📜</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-purple-900">Historique des Mouvements</h3>
-                        <p class="text-[10px] text-gray-500">Traçabilité des entrées et sorties</p>
-                    </div>
-                </div>
-            </a>
-
-            <a href="/settings" class="block bg-white border-2 border-gray-500 p-3.5 rounded-xl shadow-md hover:bg-gray-50 transition">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-gray-100 text-gray-700 rounded-lg flex items-center justify-center text-lg">⚙️</div>
-                    <div>
-                        <h3 class="font-bold text-sm text-gray-900">Gérer Lieux & Équipements</h3>
-                        <p class="text-[10px] text-gray-500">Lier équipements aux zones et administrer</p>
-                    </div>
-                </div>
-            </a>
-        </div>
-"""
-    + LAYOUT_FOOTER
-)
-
-# 2. PAGE SYNTHÈSE FINANCIÈRE
-SUMMARY_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="space-y-4">
-            <div class="flex justify-between items-center no-print">
-                <h2 class="text-sm font-bold text-indigo-800">📊 Synthèse Financière</h2>
-                <button onclick="window.print()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-semibold shadow flex items-center gap-1.5">
-                    🖨️ Exporter en PDF
-                </button>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl shadow print-shadow border">
-                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Bilan Global</h3>
-                <div class="flex justify-between items-center text-sm font-bold">
-                    <span>Valeur Totale du Stock :</span>
-                    <span class="text-emerald-700 text-base">{{ "%.2f"|format(total_stock_value) }} €</span>
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl shadow print-shadow border space-y-3">
-                <h3 class="text-xs font-bold text-blue-800 uppercase tracking-wide">📍 Valeur par Lieu de Stockage</h3>
-                <div class="divide-y text-xs">
-                    {% for row in summary_locations %}
-                    <div class="py-2 flex justify-between items-center">
-                        <span class="font-medium text-gray-800">{{ row.location_name or 'Non assigné' }}</span>
-                        <span class="font-bold text-blue-700">{{ "%.2f"|format(row.loc_value or 0) }} €</span>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl shadow print-shadow border space-y-3">
-                <h3 class="text-xs font-bold text-purple-800 uppercase tracking-wide">⚙️ Valeur par Équipement</h3>
-                <div class="divide-y text-xs">
-                    {% for row in summary_equipment %}
-                    <div class="py-2 flex justify-between items-center">
-                        <span class="font-medium text-gray-800">{{ row.equipment_name or 'Général / Divers' }}</span>
-                        <span class="font-bold text-purple-700">{{ "%.2f"|format(row.eq_value or 0) }} €</span>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-"""
-    + LAYOUT_FOOTER
-)
-
-# 3. PAGE INVENTAIRE DÉTAILLÉ
-DETAILED_INVENTORY_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="space-y-4">
-            <div class="flex justify-between items-center no-print">
-                <h2 class="text-sm font-bold text-teal-800">📋 Inventaire Détaillé</h2>
-                <button onclick="window.print()" class="bg-teal-600 hover:bg-teal-700 text-white px-3 py-2 rounded-lg text-xs font-semibold shadow flex items-center gap-1.5">
-                    🖨️ Exporter en PDF
-                </button>
-            </div>
-
-            <div class="bg-white p-3 rounded-xl shadow print-shadow border">
-                <div class="flex justify-between items-center text-xs font-bold text-gray-700 mb-2 pb-2 border-b">
-                    <span>Total articles : {{ articles|length }}</span>
-                    <span class="text-emerald-700">Valeur totale : {{ "%.2f"|format(total_stock_value) }} €</span>
-                </div>
-                
-                <div class="space-y-2">
-                    {% for item in articles %}
-                    <div class="p-2.5 rounded-lg border bg-gray-50 space-y-1">
-                        <div class="flex justify-between items-start">
-                            <span class="font-bold text-xs text-gray-900">{{ item.name }}</span>
-                            <span class="font-bold text-xs text-emerald-700">{{ "%.2f"|format(item.quantity * item.price) }} €</span>
-                        </div>
-                        <div class="text-[11px] text-gray-600 flex flex-wrap gap-x-3 gap-y-0.5">
-                            <span><b>Réf :</b> {{ item.reference or 'N/C' }}</span>
-                            <span><b>Qté :</b> {{ item.quantity }}</span>
-                            <span><b>Prix :</b> {{ "%.2f"|format(item.price) }} € {% if item.is_estimated_price %}(Est){% endif %}</span>
-                        </div>
-                        <div class="text-[10px] text-gray-500 flex gap-2 pt-0.5 border-t border-gray-200">
-                            <span>📍 {{ item.loc_name or 'Aucun lieu' }}</span>
-                            <span>⚙️ {{ item.eq_name or 'Général' }}</span>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-"""
-    + LAYOUT_FOOTER
-)
-
-# 4. PAGE SAISIE D'UNE ENTRÉE
+# --- 1. PAGE DE SAISIE DE DONNÉES (ENTRÉE / SORTIE) ---
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
     + """
-        <div class="bg-white p-4 rounded-xl shadow mb-4">
-            <h2 class="text-sm font-bold text-emerald-700 mb-3">➕ Enregistrer une Entrée / Nouvel Article</h2>
-            <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-3">
-                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-100">
-                    <label class="block text-xs font-semibold text-emerald-800 mb-1">📸 Photo de l'article (Optionnel)</label>
-                    <input type="file" name="photo" accept="image/*" capture="environment" class="w-full text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white">
-                </div>
-                
-                <input type="text" name="name" placeholder="Nom de la pièce / article" required class="w-full p-2 border rounded text-sm">
-                
-                <div class="grid grid-cols-3 gap-2">
-                    <input type="text" name="reference" placeholder="Référence" class="w-full p-2 border rounded text-sm col-span-1">
-                    <input type="number" name="quantity" placeholder="Quantité" value="1" min="1" required class="w-full p-2 border rounded text-sm col-span-1">
-                    <input type="number" step="0.01" name="price" placeholder="Prix (€)" value="0.00" required class="w-full p-2 border rounded text-sm col-span-1">
-                </div>
-
-                <div class="flex items-center gap-2 bg-gray-50 p-2.5 rounded border">
-                    <input type="checkbox" id="is_estimated_price" name="is_estimated_price" value="1" class="w-4 h-4 text-blue-600 rounded">
-                    <label for="is_estimated_price" class="text-xs font-semibold text-gray-700 cursor-pointer">Il s'agit d'un prix estimé (et non réel)</label>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2">
-                    <select name="location_id" class="w-full p-2 border rounded text-sm bg-white">
-                        {% for loc in locations %}
-                        <option value="{{ loc.id }}">📍 {{ loc.name }}</option>
-                        {% endfor %}
-                    </select>
-                    <select name="equipment_id" class="w-full p-2 border rounded text-sm bg-white">
-                        {% for eq in equipment %}
-                        <option value="{{ eq.id }}">⚙️ {{ eq.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <input type="text" name="reason" placeholder="Motif (ex: Commande fournisseur...)" class="w-full p-2 border rounded text-sm">
-
-                <button type="submit" class="w-full bg-emerald-600 text-white p-2.5 rounded text-sm font-semibold hover:bg-emerald-700">Valider l'entrée</button>
-            </form>
-        </div>
-"""
-    + LAYOUT_FOOTER
-)
-
-# 5. PAGE SAISIE D'UNE SORTIE
-EXIT_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="bg-white p-4 rounded-xl shadow mb-4">
-            <h2 class="text-sm font-bold text-amber-700 mb-3">➖ Enregistrer une Sortie (Consommation)</h2>
-            <form action="/movement_exit" method="POST" class="space-y-3">
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Sélectionner l'article</label>
-                    <select name="article_id" required class="w-full p-2.5 border rounded text-sm bg-white font-medium">
-                        <option value="">-- Choisir une pièce --</option>
-                        {% for item in articles %}
-                        <option value="{{ item.id }}">{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) - Stock dispo: {{ item.quantity }} [📍 {{ item.loc_name }}]</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Quantité sortie</label>
-                        <input type="number" name="qty" value="1" min="1" required class="w-full p-2 border rounded text-sm text-center font-bold">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Équipement cible</label>
-                        <select name="equipment_id" class="w-full p-2 border rounded text-sm bg-white">
-                            {% for eq in equipment %}
-                            <option value="{{ eq.id }}">{{ eq.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Motif / Intervention</label>
-                    <input type="text" name="reason" placeholder="Ex: Réparation suite panne..." required class="w-full p-2 border rounded text-sm">
-                </div>
-                <button type="submit" class="w-full bg-amber-600 text-white p-2.5 rounded text-sm font-semibold hover:bg-amber-700">Valider la sortie</button>
-            </form>
-        </div>
-"""
-    + LAYOUT_FOOTER
-)
-
-# 6. PAGE ÉTAT DES STOCKS
-STOCK_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="bg-white p-4 rounded-xl shadow mb-4">
-            <div class="flex justify-between items-center mb-2">
-                <h2 class="text-sm font-bold text-blue-700">📦 État des Stocks & Filtres</h2>
-                <span class="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded">Valeur : {{ "%.2f"|format(total_stock_value) }} €</span>
+    <div class="max-w-3xl mx-auto space-y-6">
+        <!-- Bandeau d'en-tête -->
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 flex justify-between items-center">
+            <div>
+                <h1 class="text-base font-bold text-slate-900">Saisie des Mouvements</h1>
+                <p class="text-xs text-slate-500">Enregistrez de nouvelles entrées ou consommez du matériel pour intervention</p>
             </div>
-            <form method="GET" action="/stock" class="space-y-2">
-                <input type="text" name="search" value="{{ search_query or '' }}" placeholder="🔍 Rechercher par nom ou référence..." class="w-full p-2 border rounded text-xs bg-gray-50">
-                <div class="grid grid-cols-2 gap-2">
-                    <select name="loc_filter" class="w-full p-2 border rounded text-xs bg-gray-50">
-                        <option value="">Toutes les zones (Lieux)</option>
-                        {% for loc in locations %}
-                        <option value="{{ loc.id }}" {% if current_loc == loc.id|string %}selected{% endif %}>📍 {{ loc.name }}</option>
-                        {% endfor %}
-                    </select>
-                    <select name="eq_filter" class="w-full p-2 border rounded text-xs bg-gray-50">
-                        <option value="">Tous les équipements</option>
-                        {% for eq in equipment %}
-                        <option value="{{ eq.id }}" {% if current_eq == eq.id|string %}selected{% endif %}>⚙️ {{ eq.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="flex gap-2 pt-1">
-                    <button type="submit" class="flex-1 bg-blue-600 text-white p-2 rounded text-xs font-semibold hover:bg-blue-700">Filtrer</button>
-                    {% if search_query or current_loc or current_eq %}
-                    <a href="/stock" class="bg-red-100 text-red-700 px-3 py-2 rounded text-xs font-semibold flex items-center justify-center hover:bg-red-200">Effacer</a>
-                    {% endif %}
-                </div>
-            </form>
         </div>
 
-        <div class="space-y-3">
-            <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wide">Inventaire ({{ articles|length }} articles)</h3>
-            {% for item in articles %}
-            <div class="bg-white p-3.5 rounded-xl shadow space-y-2">
-                <div class="flex justify-between items-center gap-3">
-                    {% if item.image_filename %}
-                    <img src="{{ url_for('static', filename='uploads/' + item.image_filename) }}" alt="Photo" class="w-14 h-14 object-cover rounded-lg border flex-shrink-0">
-                    {% else %}
-                    <div class="w-14 h-14 bg-gray-100 rounded-lg border flex items-center justify-center text-gray-400 text-[9px] text-center flex-shrink-0">Pas de photo</div>
-                    {% endif %}
-                    <div class="flex-grow">
-                        <div class="font-bold text-sm text-gray-800">{{ item.name }}</div>
-                        <div class="text-xs text-gray-500 flex gap-2 items-center">
-                            <span>Réf: {{ item.reference or 'N/C' }}</span>
-                            <span class="font-semibold text-green-700">{{ "%.2f"|format(item.price) }} €/u</span>
-                            {% if item.is_estimated_price %}
-                            <span class="bg-amber-100 text-amber-800 text-[9px] px-1.5 py-0.5 rounded font-bold">Estimé</span>
-                            {% else %}
-                            <span class="bg-emerald-100 text-emerald-800 text-[9px] px-1.5 py-0.5 rounded font-bold">Réel</span>
-                            {% endif %}
+        <!-- Formulaire avec Onglets d'action -->
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+            <div class="bg-slate-900 px-6 py-3 border-b border-slate-800 flex gap-4">
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Formulaire d'enregistrement</span>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- Section Entrée -->
+                <div class="space-y-4">
+                    <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500"></span> Entrée en stock / Nouvel Article
+                    </h2>
+                    
+                    <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div class="sm:col-span-2">
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Nom de l'article *</label>
+                                <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
+                                <input type="text" name="reference" placeholder="ex: REF-8840" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                            </div>
                         </div>
-                        <div class="mt-1 flex flex-wrap gap-1">
-                            <span class="bg-blue-50 text-blue-700 text-[10px] px-2 py-0.5 rounded font-medium">📍 {{ item.loc_name }}</span>
-                            <span class="bg-purple-50 text-purple-700 text-[10px] px-2 py-0.5 rounded font-medium">⚙️ {{ item.eq_name }}</span>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité ajoutée *</label>
+                                <input type="number" name="quantity" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Prix unitaire (€)</label>
+                                <input type="number" step="0.01" name="price" value="0.00" required class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                            </div>
+                            <div class="flex items-end pb-2">
+                                <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                                    <input type="checkbox" name="is_estimated_price" value="1" class="rounded border-slate-300 text-slate-900">
+                                    <span>Prix estimé</span>
+                                </label>
+                            </div>
                         </div>
-                    </div>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <form action="/update/{{ item.id }}" method="POST">
-                            <input type="hidden" name="action" value="minus">
-                            <button type="submit" class="w-7 h-7 bg-gray-100 rounded-full font-bold text-gray-600 flex items-center justify-center hover:bg-gray-200">-</button>
-                        </form>
-                        <span class="font-bold text-base w-6 text-center {% if item.quantity <= item.min_threshold %}text-red-600{% else %}text-gray-800{% endif %}">
-                            {{ item.quantity }}
-                        </span>
-                        <form action="/update/{{ item.id }}" method="POST">
-                            <input type="hidden" name="action" value="plus">
-                            <button type="submit" class="w-7 h-7 bg-gray-100 rounded-full font-bold text-gray-600 flex items-center justify-center hover:bg-gray-200">+</button>
-                        </form>
-                    </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement du stock</label>
+                                <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                                    <option value="">-- Sélectionner un lieu --</option>
+                                    {% for loc in locations %}
+                                    <option value="{{ loc.id }}">{{ loc.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Équipement associé</label>
+                                <select name="equipment_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                                    <option value="">-- Sélectionner une machine --</option>
+                                    {% for eq in equipment %}
+                                    <option value="{{ eq.id }}">{{ eq.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 mb-1">Motif / Origine</label>
+                            <input type="text" name="reason" placeholder="ex: Livré par fournisseur" class="w-full text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 outline-none">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 mb-1">Photo de l'article</label>
+                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200">
+                        </div>
+
+                        <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
+                            Valider l'Entrée
+                        </button>
+                    </form>
                 </div>
 
-                <div class="flex gap-2 pt-1 border-t border-gray-100">
-                    <a href="/edit/{{ item.id }}" class="flex-1 bg-gray-100 text-gray-700 py-1.5 rounded text-center text-xs font-semibold hover:bg-gray-200">✏️ Modifier</a>
-                    <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Voulez-vous vraiment supprimer cet article ?');" class="flex-1">
-                        <button type="submit" class="w-full bg-red-50 text-red-600 py-1.5 rounded text-center text-xs font-semibold hover:bg-red-100">🗑️ Supprimer</button>
+                <hr class="border-slate-200 my-6">
+
+                <!-- Section Sortie -->
+                <div class="space-y-4">
+                    <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-amber-500"></span> Sortie de stock / Consommation
+                    </h2>
+
+                    <form action="/movement_exit" method="POST" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
+                            <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-slate-900 outline-none">
+                                <option value="">-- Choisir une pièce --</option>
+                                {% for item in articles %}
+                                <option value="{{ item.id }}">{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité sortie *</label>
+                                <input type="number" name="qty" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Motif / Intervenant *</label>
+                                <input type="text" name="reason" required placeholder="ex: Dépannage pompe" class="w-full text-xs p-2.5 border border-slate-300 rounded">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="w-full bg-slate-700 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
+                            Enregistrer la Sortie
+                        </button>
                     </form>
                 </div>
             </div>
-            {% endfor %}
         </div>
+    </div>
 """
     + LAYOUT_FOOTER
 )
 
-# 7. PAGE DE MODIFICATION D'UN ARTICLE
-EDIT_TEMPLATE = (
+# --- 2. PAGE DE SUIVI DES DONNÉES & TABLEAU DE BORD ---
+STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
-        <div class="bg-white p-4 rounded-xl shadow mb-4">
-            <h2 class="text-sm font-bold text-blue-700 mb-3">✏️ Modifier l'article</h2>
-            <form action="/edit/{{ article.id }}" method="POST" enctype="multipart/form-data" class="space-y-3">
-                <div class="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-center gap-3">
-                    {% if article.image_filename %}
-                    <img src="{{ url_for('static', filename='uploads/' + article.image_filename) }}" class="w-12 h-12 object-cover rounded border">
+    <div class="space-y-6">
+        <!-- Bandeau Synthèse -->
+        <div class="bg-slate-900 text-white rounded-lg p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Valeur totale de l'inventaire</span>
+                <div class="text-2xl font-extrabold text-white mt-0.5">{{ "%.2f"|format(total_stock_value) }} €</div>
+            </div>
+            <div class="flex gap-2 no-print">
+                <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-4 py-2 rounded border border-slate-700 transition">
+                    🖨️ Imprimer / PDF
+                </button>
+            </div>
+        </div>
+
+        <!-- Filtres Tableur -->
+        <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
+            <form method="GET" action="/stock" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none">
+                <select name="loc_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
+                    <option value="">Tous les emplacements</option>
+                    {% for loc in locations %}
+                    <option value="{{ loc.id }}" {% if current_loc == loc.id|string %}selected{% endif %}>{{ loc.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="eq_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
+                    <option value="">Tous les équipements</option>
+                    {% for eq in equipment %}
+                    <option value="{{ eq.id }}" {% if current_eq == eq.id|string %}selected{% endif %}>{{ eq.name }}</option>
+                    {% endfor %}
+                </select>
+                <div class="flex gap-2">
+                    <button type="submit" class="flex-1 bg-slate-900 text-white text-xs font-semibold py-2 rounded hover:bg-slate-800">Filtrer</button>
+                    {% if search_query or current_loc or current_eq %}
+                    <a href="/stock" class="px-3 py-2 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center">Effacer</a>
                     {% endif %}
-                    <div class="flex-grow">
-                        <label class="block text-[11px] font-semibold text-blue-900 mb-1">Remplacer la photo (Optionnel)</label>
-                        <input type="file" name="photo" accept="image/*" capture="environment" class="w-full text-xs text-gray-600">
-                    </div>
-                </div>
-                
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Intitulé / Nom de la pièce</label>
-                    <input type="text" name="name" value="{{ article.name }}" required class="w-full p-2 border rounded text-sm">
-                </div>
-                
-                <div class="grid grid-cols-3 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Référence</label>
-                        <input type="text" name="reference" value="{{ article.reference or '' }}" class="w-full p-2 border rounded text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Quantité</label>
-                        <input type="number" name="quantity" value="{{ article.quantity }}" min="0" required class="w-full p-2 border rounded text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Prix (€)</label>
-                        <input type="number" step="0.01" name="price" value="{{ article.price }}" required class="w-full p-2 border rounded text-sm">
-                    </div>
-                </div>
-
-                <div class="flex items-center gap-2 bg-gray-50 p-2.5 rounded border">
-                    <input type="checkbox" id="is_estimated_price" name="is_estimated_price" value="1" {% if article.is_estimated_price %}checked{% endif %} class="w-4 h-4 text-blue-600 rounded">
-                    <label for="is_estimated_price" class="text-xs font-semibold text-gray-700 cursor-pointer">Il s'agit d'un prix estimé</label>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Lieu</label>
-                        <select name="location_id" class="w-full p-2 border rounded text-sm bg-white">
-                            {% for loc in locations %}
-                            <option value="{{ loc.id }}" {% if article.location_id == loc.id %}selected{% endif %}>📍 {{ loc.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Équipement</label>
-                        <select name="equipment_id" class="w-full p-2 border rounded text-sm bg-white">
-                            {% for eq in equipment %}
-                            <option value="{{ eq.id }}" {% if article.equipment_id == eq.id %}selected{% endif %}>⚙️ {{ eq.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-
-                <div class="flex gap-2 pt-2">
-                    <a href="/stock" class="flex-1 bg-gray-200 text-gray-700 p-2.5 rounded text-center text-sm font-semibold hover:bg-gray-300">Annuler</a>
-                    <button type="submit" class="flex-1 bg-blue-600 text-white p-2.5 rounded text-sm font-semibold hover:bg-blue-700">Enregistrer</button>
                 </div>
             </form>
         </div>
-"""
-    + LAYOUT_FOOTER
-)
 
-# 8. PAGE HISTORIQUE DES MOUVEMENTS
-HISTORY_TEMPLATE = (
-    LAYOUT_HEADER
-    + """
-        <div class="space-y-3">
-            <h2 class="text-sm font-bold text-purple-800 mb-2">📜 Historique des Mouvements</h2>
-            {% for m in movements %}
-            <div class="bg-white p-3 rounded-xl shadow border-l-4 {% if m.type == 'ENTREE' %}border-emerald-500{% else %}border-amber-500{% endif %} space-y-1">
-                <div class="flex justify-between items-center">
-                    <span class="text-xs font-bold {% if m.type == 'ENTREE' %}text-emerald-700{% else %}text-amber-700{% endif %}">
-                        {% if m.type == 'ENTREE' %}➕ ENTREE (+{{ m.quantity }}){% else %}➖ SORTIE (-{{ m.quantity }}){% endif %}
-                    </span>
-                    <span class="text-[10px] text-gray-400">{{ m.date }}</span>
-                </div>
-                <div class="font-bold text-sm text-gray-800">{{ m.article_name }} <span class="text-xs font-normal text-gray-500">(Réf: {{ m.reference or 'N/C' }})</span></div>
-                <div class="text-xs text-gray-600 bg-gray-50 p-1.5 rounded border">
-                    <span class="font-semibold">Motif :</span> {{ m.reason or 'Aucun motif' }}
-                </div>
+        <!-- Tableau inspiré de la charte Excel -->
+        <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs print-table">
+                    <thead>
+                        <tr class="bg-slate-900 text-white border-b border-slate-800 uppercase font-semibold text-[11px] tracking-wider">
+                            <th class="p-3 border-r border-slate-800">Statut</th>
+                            <th class="p-3 border-r border-slate-800">N° Article</th>
+                            <th class="p-3 border-r border-slate-800">Nom de l'article</th>
+                            <th class="p-3 border-r border-slate-800">Emplacement</th>
+                            <th class="p-3 border-r border-slate-800">Équipement</th>
+                            <th class="p-3 border-r border-slate-800 text-right">Prix Unitaire</th>
+                            <th class="p-3 border-r border-slate-800 text-center">Quantité</th>
+                            <th class="p-3 text-right">Valeur Totale</th>
+                            <th class="p-3 text-center no-print">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200">
+                        {% for item in articles %}
+                        <!-- Alerte visuelle Corail/Pêche pour stock critique (<=2) -->
+                        <tr class="{% if item.quantity <= 2 %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
+                            <td class="p-3 font-bold border-r border-slate-200">
+                                {% if item.quantity <= 2 %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
+                                {% else %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-semibold uppercase">OK</span>
+                                {% endif %}
+                            </td>
+                            <td class="p-3 font-mono text-slate-500 border-r border-slate-200">{{ item.reference or '-' }}</td>
+                            <td class="p-3 font-semibold text-slate-900 border-r border-slate-200">
+                                {{ item.name }}
+                                {% if item.is_estimated_price %}
+                                <span class="text-[9px] text-amber-700 bg-amber-50 px-1 rounded ml-1 font-normal">(Est.)</span>
+                                {% endif %}
+                            </td>
+                            <td class="p-3 text-slate-600 border-r border-slate-200">{{ item.loc_name or 'Non assigné' }}</td>
+                            <td class="p-3 text-slate-600 border-r border-slate-200">{{ item.eq_name or '-' }}</td>
+                            <td class="p-3 text-right text-slate-700 border-r border-slate-200 font-mono">{{ "%.2f"|format(item.price) }} €</td>
+                            <td class="p-3 text-center font-bold text-slate-900 border-r border-slate-200">{{ item.quantity }}</td>
+                            <td class="p-3 text-right font-bold text-slate-900 font-mono">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
+                            <td class="p-3 text-center no-print">
+                                <div class="flex items-center justify-center gap-2">
+                                    <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                        <input type="hidden" name="action" value="minus">
+                                        <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">-</button>
+                                    </form>
+                                    <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                        <input type="hidden" name="action" value="plus">
+                                        <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
+                                    </form>
+                                    <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer ?');" class="inline ml-2">
+                                        <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="9" class="p-6 text-center text-slate-400 text-xs">Aucune donnée disponible dans le tableau.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-            {% endfor %}
         </div>
+    </div>
 """
     + LAYOUT_FOOTER
 )
 
-# 9. PAGE DE GESTION DES LIEUX ET ÉQUIPEMENTS
+# --- 3. PAGE DE RÉGLAGES (GESTION LIEUX & ÉQUIPEMENTS) ---
 SETTINGS_TEMPLATE = (
     LAYOUT_HEADER
     + """
-        <div class="space-y-6">
-            <h2 class="text-sm font-bold text-gray-800 mb-2">⚙️ Gestion des Lieux & Équipements</h2>
+    <div class="max-w-4xl mx-auto space-y-6">
+        <div class="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
+            <h1 class="text-base font-bold text-slate-900">Réglages & Configuration</h1>
+            <p class="text-xs text-slate-500">Gérez les emplacements physiques de stockage et les équipements/machines associés</p>
+        </div>
 
-            <div class="bg-white p-4 rounded-xl shadow space-y-3">
-                <h3 class="text-xs font-bold text-blue-800 uppercase">📍 Lieux / Zones de stockage</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Gestion des Emplacements -->
+            <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
+                <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
+                    📍 Emplacements de Stockage
+                </h2>
                 <form action="/add_location" method="POST" class="flex gap-2">
-                    <input type="text" name="name" placeholder="Nouveau lieu..." required class="flex-grow p-2 border rounded text-xs">
-                    <button type="submit" class="bg-blue-600 text-white px-3 py-2 rounded text-xs font-semibold hover:bg-blue-700">Ajouter</button>
+                    <input type="text" name="name" required placeholder="ex: Atelier A, Étagère 2" class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none">
+                    <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded text-xs font-semibold">Ajouter</button>
                 </form>
-                <div class="divide-y text-xs">
+
+                <div class="divide-y divide-slate-100 text-xs pt-2">
                     {% for loc in locations %}
-                    <div class="py-2 flex justify-between items-center">
-                        <span class="font-medium text-gray-800">{{ loc.name }}</span>
-                        <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer ce lieu ?');">
-                            <button type="submit" class="text-red-600 font-semibold hover:underline">Supprimer</button>
+                    <div class="py-2.5 flex justify-between items-center">
+                        <span class="font-semibold text-slate-700">{{ loc.name }}</span>
+                        <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer cet emplacement ?');">
+                            <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
                         </form>
                     </div>
+                    {% else %}
+                    <p class="text-slate-400 text-xs italic">Aucun lieu configuré.</p>
                     {% endfor %}
                 </div>
             </div>
 
-            <div class="bg-white p-4 rounded-xl shadow space-y-3">
-                <h3 class="text-xs font-bold text-purple-800 uppercase">⚙️ Équipements / Machines & Lieu associé</h3>
+            <!-- Gestion des Équipements -->
+            <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
+                <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
+                    ⚙️ Équipements & Machines
+                </h2>
                 <form action="/add_equipment" method="POST" class="space-y-2">
-                    <input type="text" name="name" placeholder="Nom de l'équipement..." required class="w-full p-2 border rounded text-xs">
-                    <select name="location_id" required class="w-full p-2 border rounded text-xs bg-white">
-                        <option value="">-- Choisir le lieu rattaché --</option>
+                    <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none">
+                    <select name="location_id" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                        <option value="">-- Rattacher à un emplacement --</option>
                         {% for loc in locations %}
-                        <option value="{{ loc.id }}">📍 {{ loc.name }}</option>
+                        <option value="{{ loc.id }}">{{ loc.name }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="w-full bg-purple-600 text-white py-2 rounded text-xs font-semibold hover:bg-purple-700">Ajouter l'équipement</button>
+                    <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white py-2 rounded text-xs font-semibold">Ajouter l'Équipement</button>
                 </form>
-                <div class="divide-y text-xs pt-2">
+
+                <div class="divide-y divide-slate-100 text-xs pt-2">
                     {% for eq in equipment %}
                     <div class="py-2.5 flex justify-between items-center">
                         <div>
-                            <span class="font-bold text-gray-800 block">{{ eq.name }}</span>
-                            <span class="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-medium">📍 {{ eq.loc_name or 'Aucun lieu' }}</span>
+                            <span class="font-semibold text-slate-800 block">{{ eq.name }}</span>
+                            <span class="text-[10px] text-slate-500">📍 {{ eq.loc_name or 'Aucun lieu' }}</span>
                         </div>
                         <form action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');">
-                            <button type="submit" class="text-red-600 font-semibold hover:underline">Supprimer</button>
+                            <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
                         </form>
                     </div>
+                    {% else %}
+                    <p class="text-slate-400 text-xs italic">Aucun équipement configuré.</p>
                     {% endfor %}
                 </div>
             </div>
         </div>
-
+    </div>
 """
     + LAYOUT_FOOTER
 )
-# --- ROUTES FLASK ---
+
+
+# --- ROUTES FLASK CORRESPONDANTES ---
 
 
 def calculate_total_stock_value(articles_list=None):
@@ -1089,6 +474,7 @@ def calculate_total_stock_value(articles_list=None):
   if articles_list is None:
     cur.execute("SELECT quantity, price FROM articles")
     articles_list = cur.fetchall()
+  cur.close()
   return sum(
       (item["quantity"] * (item["price"] or 0.0)) for item in articles_list
   )
@@ -1096,98 +482,30 @@ def calculate_total_stock_value(articles_list=None):
 
 @app.route("/")
 def home():
-  total_val = calculate_total_stock_value()
-  return render_template_string(HOME_TEMPLATE, total_stock_value=total_val)
-
-
-@app.route("/summary")
-def summary_view():
-  db = get_db()
-  cur = db.cursor()
-  total_val = calculate_total_stock_value()
-
-  cur.execute("""
-        SELECT l.name as location_name, SUM(a.quantity * a.price) as loc_value
-        FROM locations l
-        LEFT JOIN articles a ON a.location_id = l.id
-        GROUP BY l.id, l.name
-        ORDER BY loc_value DESC
-    """)
-  summary_locations = cur.fetchall()
-
-  cur.execute("""
-        SELECT e.name as equipment_name, SUM(a.quantity * a.price) as eq_value
-        FROM equipment e
-        LEFT JOIN articles a ON a.equipment_id = e.id
-        GROUP BY e.id, e.name
-        ORDER BY eq_value DESC
-    """)
-  summary_equipment = cur.fetchall()
-
-  return render_template_string(
-      SUMMARY_TEMPLATE,
-      total_stock_value=total_val,
-      summary_locations=summary_locations,
-      summary_equipment=summary_equipment,
-  )
-
-
-@app.route("/detailed_inventory")
-def detailed_inventory_view():
-  db = get_db()
-  cur = db.cursor()
-  total_val = calculate_total_stock_value()
-  cur.execute("""
-        SELECT a.*, l.name as loc_name, e.name as eq_name 
-        FROM articles a
-        LEFT JOIN locations l ON a.location_id = l.id
-        LEFT JOIN equipment e ON a.equipment_id = e.id
-        ORDER BY a.name
-    """)
-  articles = cur.fetchall()
-
-  return render_template_string(
-      DETAILED_INVENTORY_TEMPLATE,
-      total_stock_value=total_val,
-      articles=articles,
-  )
+  return redirect(url_for("stock_view"))
 
 
 @app.route("/entry")
 def entry_form():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT * FROM locations")
+  cur.execute("SELECT * FROM locations ORDER BY name")
   locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
+  cur.execute("SELECT * FROM equipment ORDER BY name")
   equipment = cur.fetchall()
+  cur.execute(
+      "SELECT a.*, l.name as loc_name FROM articles a LEFT JOIN locations l ON"
+      " a.location_id = l.id ORDER BY a.name"
+  )
+  articles = cur.fetchall()
+  cur.close()
   total_val = calculate_total_stock_value()
   return render_template_string(
       ENTRY_TEMPLATE,
+      active_page="entry",
       locations=locations,
       equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/exit")
-def exit_form():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("""
-        SELECT a.*, l.name as loc_name 
-        FROM articles a 
-        LEFT JOIN locations l ON a.location_id = l.id 
-        ORDER BY a.name
-    """)
-  articles = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
-  equipment = cur.fetchall()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      EXIT_TEMPLATE,
       articles=articles,
-      equipment=equipment,
       total_stock_value=total_val,
   )
 
@@ -1196,9 +514,9 @@ def exit_form():
 def stock_view():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT * FROM locations")
+  cur.execute("SELECT * FROM locations ORDER BY name")
   locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment")
+  cur.execute("SELECT * FROM equipment ORDER BY name")
   equipment = cur.fetchall()
 
   search_query = request.args.get("search", "").strip()
@@ -1227,11 +545,13 @@ def stock_view():
   query += " ORDER BY a.name"
   cur.execute(query, params)
   articles = cur.fetchall()
+  cur.close()
 
   filtered_total_val = calculate_total_stock_value(articles)
 
   return render_template_string(
       STOCK_TEMPLATE,
+      active_page="stock",
       locations=locations,
       equipment=equipment,
       articles=articles,
@@ -1239,106 +559,6 @@ def stock_view():
       current_loc=loc_filter,
       current_eq=eq_filter,
       total_stock_value=filtered_total_val,
-  )
-
-
-@app.route("/edit/<int:id>", methods=["GET", "POST"])
-def edit_article(id):
-  db = get_db()
-  cur = db.cursor()
-  if request.method == "POST":
-    name = request.form["name"]
-    reference = request.form["reference"]
-    quantity = int(request.form["quantity"])
-    price = float(request.form["price"] or 0.0)
-    is_estimated_price = 1 if "is_estimated_price" in request.form else 0
-    location_id = request.form["location_id"]
-    equipment_id = request.form["equipment_id"]
-
-    if "photo" in request.files:
-      file = request.files["photo"]
-      if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filename = f"art_{os.urandom(4).hex()}_{filename}"
-        file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        cur.execute(
-            """
-                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
-                is_estimated_price = %s, location_id = %s, equipment_id = %s, image_filename = %s 
-                WHERE id = %s
-            """,
-            (
-                name,
-                reference,
-                quantity,
-                price,
-                is_estimated_price,
-                location_id,
-                equipment_id,
-                filename,
-                id,
-            ),
-        )
-      else:
-        cur.execute(
-            """
-                UPDATE articles SET name = %s, reference = %s, quantity = %s, price = %s, 
-                is_estimated_price = %s, location_id = %s, equipment_id = %s 
-                WHERE id = %s
-            """,
-            (
-                name,
-                reference,
-                quantity,
-                price,
-                is_estimated_price,
-                location_id,
-                equipment_id,
-                id,
-            ),
-        )
-    db.commit()
-    return redirect(url_for("stock_view"))
-
-  cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
-  article = cur.fetchone()
-  cur.execute("SELECT * FROM locations ORDER BY name")
-  locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment ORDER BY name")
-  equipment = cur.fetchall()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      EDIT_TEMPLATE,
-      article=article,
-      locations=locations,
-      equipment=equipment,
-      total_stock_value=total_val,
-  )
-
-
-@app.route("/delete/<int:id>", methods=["POST"])
-def delete_article(id):
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("DELETE FROM articles WHERE id = %s", (id,))
-  db.commit()
-  return redirect(url_for("stock_view"))
-
-
-@app.route("/history")
-def history_view():
-  db = get_db()
-  cur = db.cursor()
-  cur.execute("""
-        SELECT m.*, a.name as article_name, a.reference 
-        FROM movements m
-        LEFT JOIN articles a ON m.article_id = a.id
-        ORDER BY m.date DESC
-    """)
-  movements = cur.fetchall()
-  total_val = calculate_total_stock_value()
-  return render_template_string(
-      HISTORY_TEMPLATE, movements=movements, total_stock_value=total_val
   )
 
 
@@ -1355,9 +575,11 @@ def settings_view():
         ORDER BY e.name
     """)
   equipment = cur.fetchall()
+  cur.close()
   total_val = calculate_total_stock_value()
   return render_template_string(
       SETTINGS_TEMPLATE,
+      active_page="settings",
       locations=locations,
       equipment=equipment,
       total_stock_value=total_val,
@@ -1372,6 +594,7 @@ def add_location():
   if name:
     cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
     db.commit()
+  cur.close()
   return redirect(url_for("settings_view"))
 
 
@@ -1381,6 +604,7 @@ def delete_location(id):
   cur = db.cursor()
   cur.execute("DELETE FROM locations WHERE id = %s", (id,))
   db.commit()
+  cur.close()
   return redirect(url_for("settings_view"))
 
 
@@ -1389,13 +613,14 @@ def add_equipment():
   db = get_db()
   cur = db.cursor()
   name = request.form["name"].strip()
-  location_id = request.form["location_id"]
-  if name and location_id:
+  location_id = request.form.get("location_id") or None
+  if name:
     cur.execute(
         "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
         (name, location_id),
     )
     db.commit()
+  cur.close()
   return redirect(url_for("settings_view"))
 
 
@@ -1405,6 +630,7 @@ def delete_equipment(id):
   cur = db.cursor()
   cur.execute("DELETE FROM equipment WHERE id = %s", (id,))
   db.commit()
+  cur.close()
   return redirect(url_for("settings_view"))
 
 
@@ -1413,13 +639,13 @@ def add_article():
   db = get_db()
   cur = db.cursor()
   name = request.form["name"]
-  reference = request.form["reference"]
-  quantity = int(request.form["quantity"])
-  price = float(request.form["price"] or 0.0)
+  reference = request.form.get("reference")
+  quantity = int(request.form.get("quantity", 1))
+  price = float(request.form.get("price") or 0.0)
   is_estimated_price = 1 if "is_estimated_price" in request.form else 0
-  location_id = request.form["location_id"]
-  equipment_id = request.form["equipment_id"]
-  reason = request.form["reason"] or "Stock initial / Entrée"
+  location_id = request.form.get("location_id") or None
+  equipment_id = request.form.get("equipment_id") or None
+  reason = request.form.get("reason") or "Entrée stock"
 
   filename = None
   if "photo" in request.files:
@@ -1455,6 +681,7 @@ def add_article():
       (article_id, quantity, reason),
   )
   db.commit()
+  cur.close()
   return redirect(url_for("stock_view"))
 
 
@@ -1483,6 +710,7 @@ def movement_exit():
         (article_id, "SORTIE", qty, reason),
     )
     db.commit()
+  cur.close()
 
   return redirect(url_for("stock_view"))
 
@@ -1501,9 +729,19 @@ def update_quantity(id):
     )
     cur.execute("UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, id))
     db.commit()
+  cur.close()
+  return redirect(url_for("stock_view"))
+
+
+@app.route("/delete/<int:id>", methods=["POST"])
+def delete_article(id):
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("DELETE FROM articles WHERE id = %s", (id,))
+  db.commit()
+  cur.close()
   return redirect(url_for("stock_view"))
 
 
 if __name__ == "__main__":
-  init_db()
-  app.run(host="0.0.0.0", port=5000, debug=True)
+  app.run(host="0.0.0.0", port=10000, debug=True)
