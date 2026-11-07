@@ -357,7 +357,7 @@ STOCK_TEMPLATE = (
                         <span class="text-base text-emerald-300">📍</span>
                         <h2 class="text-sm font-bold tracking-wide uppercase">{{ group.location_name }}</h2>
                         <span class="text-[11px] bg-forest-light text-emerald-200 px-2 py-0.5 rounded-full font-semibold border border-emerald-800">
-                            {{ group.items|length }} article(s)
+                            {{ group.items | length }} article(s)
                         </span>
                     </div>
                     <div class="text-xs font-semibold text-emerald-300">
@@ -708,7 +708,7 @@ def stock_view():
 
   filtered_total_val = calculate_total_stock_value(articles)
 
-  # Groupement dynamique par lieu de stockage
+  # Groupement dynamique strict par lieu de stockage sous forme de listes de dictionnaires
   grouped_dict = {}
   for item in articles:
     loc_name = item["loc_name"]
@@ -722,7 +722,7 @@ def stock_view():
   grouped_articles = [
       {
           "location_name": loc_name,
-          "items": data["items"],
+          "items": list(data["items"]),
           "total_value": data["total_value"],
       }
       for loc_name, data in grouped_dict.items()
