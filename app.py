@@ -93,7 +93,7 @@ with app.app_context():
   init_db()
 
 
-# --- LAYOUT UNIFIÉ & CHARTE GRAPHIQUE (Inspirée du Vert Sapin Naturel) ---
+# --- LAYOUT UNIFIÉ & CHARTE GRAPHIQUE (Vert Sapin Naturel) ---
 
 LAYOUT_HEADER = """
 <!DOCTYPE html>
@@ -228,7 +228,7 @@ ENTRY_TEMPLATE = (
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Date d'entrée</label>
-                                <input type="date" name="entry_date" value="" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
+                                <input type="date" name="entry_date" value="{{ today_date }}" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
                             </div>
                         </div>
 
@@ -351,7 +351,7 @@ STOCK_TEMPLATE = (
         {% if grouped_articles %}
             {% for group in grouped_articles %}
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden mb-6">
-                <!-- En-tête du Lieu (Aux couleurs de la charte verte) -->
+                <!-- En-tête du Lieu -->
                 <div class="bg-forest text-white px-4 py-3 flex justify-between items-center border-b border-emerald-900">
                     <div class="flex items-center gap-2">
                         <span class="text-base text-emerald-300">📍</span>
@@ -657,6 +657,7 @@ def entry_form():
   articles = cur.fetchall()
   cur.close()
   total_val = calculate_total_stock_value()
+  today_str = datetime.date.today().strftime("%Y-%m-%d")
   return render_template_string(
       ENTRY_TEMPLATE,
       active_page="entry",
@@ -664,6 +665,7 @@ def entry_form():
       equipment=equipment,
       articles=articles,
       total_stock_value=total_val,
+      today_date=today_str,
   )
 
 
