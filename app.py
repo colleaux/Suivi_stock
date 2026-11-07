@@ -93,7 +93,7 @@ with app.app_context():
   init_db()
 
 
-# --- LAYOUT UNIFIÉ & CHARTE GRAPHIQUE ---
+# --- LAYOUT UNIFIÉ & CHARTE GRAPHIQUE (Inspirée du Vert Sapin Naturel) ---
 
 LAYOUT_HEADER = """
 <!DOCTYPE html>
@@ -108,33 +108,38 @@ LAYOUT_HEADER = """
             .no-print { display: none !important; }
             body { background: white !important; font-size: 11px; }
             .print-table { border: 1px solid #CBD5E1 !important; }
+            .page-break { page-break-before: always; }
         }
+        .bg-forest { background-color: #0b3d2c; }
+        .bg-forest-light { background-color: #124e38; }
+        .border-forest { border-color: #0b3d2c; }
+        .text-forest { color: #0b3d2c; }
     </style>
 </head>
-<body class="bg-slate-100 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+<body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
 
     <!-- Header / Navbar Principal -->
-    <header class="bg-slate-900 text-white shadow-md border-b border-slate-800 no-print">
+    <header class="bg-forest text-white shadow-md border-b border-emerald-900 no-print">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center gap-3">
-                    <div class="w-8 h-8 bg-slate-700 rounded-lg flex items-center justify-center font-bold text-slate-200">
-                        📦
+                    <div class="w-9 h-9 bg-forest-light rounded-lg flex items-center justify-center font-bold text-emerald-300 border border-emerald-700 shadow-inner">
+                        🌿
                     </div>
                     <div>
-                        <a href="/" class="text-base font-bold tracking-tight text-white block">SUIVI INVENTAIRE</a>
-                        <span class="text-[10px] text-slate-400 font-medium">CAPITAL IMMOBILISÉ : {{ "%.2f"|format(total_stock_value or 0) }} €</span>
+                        <a href="/" class="text-sm font-extrabold tracking-wider uppercase text-white block">SUIVI INVENTAIRE</a>
+                        <span class="text-[10px] text-emerald-300 font-medium tracking-wide">CAPITAL IMMOBILISÉ : {{ "%.2f"|format(total_stock_value or 0) }} €</span>
                     </div>
                 </div>
 
                 <nav class="flex space-x-1 sm:space-x-2">
-                    <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                    <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>✏️</span> Saisie
                     </a>
-                    <a href="/stock" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'stock' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                    <a href="/stock" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>📊</span> Suivi & Rapport
                     </a>
-                    <a href="/settings" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'settings' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                    <a href="/settings" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>⚙️</span> Réglages
                     </a>
                 </nav>
@@ -147,7 +152,7 @@ LAYOUT_HEADER = """
 
 LAYOUT_FOOTER = """
     </main>
-    <footer class="bg-slate-900 text-slate-500 text-[11px] py-4 border-t border-slate-800 text-center no-print mt-auto">
+    <footer class="bg-forest text-emerald-300/70 text-[11px] py-4 border-t border-emerald-900 text-center no-print mt-auto">
         Système de Gestion de Stock & Operations | Facility Management
     </footer>
 </body>
@@ -167,7 +172,7 @@ ENTRY_TEMPLATE = (
         </div>
 
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-            <div class="bg-slate-900 px-6 py-3 border-b border-slate-800 flex gap-4">
+            <div class="bg-forest px-6 py-3 border-b border-emerald-900 flex gap-4">
                 <span class="text-xs font-bold text-white uppercase tracking-wider">Formulaire d'enregistrement</span>
             </div>
             
@@ -175,18 +180,18 @@ ENTRY_TEMPLATE = (
                 <!-- Section Entrée -->
                 <div class="space-y-4">
                     <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-emerald-500"></span> Entrée en stock / Nouvel Article
+                        <span class="w-2 h-2 rounded-full bg-emerald-600"></span> Entrée en stock / Nouvel Article
                     </h2>
                     
                     <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-4">
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div class="sm:col-span-2">
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Nom de l'article *</label>
-                                <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none">
+                                <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
-                                <input type="text" name="reference" placeholder="ex: REF-8840" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none">
+                                <input type="text" name="reference" placeholder="ex: REF-8840" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                             </div>
                         </div>
 
@@ -205,14 +210,14 @@ ENTRY_TEMPLATE = (
                             </div>
                             <div class="flex items-end pb-2">
                                 <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
-                                    <input type="checkbox" name="is_estimated_price" value="1" class="rounded border-slate-300 text-slate-900">
+                                    <input type="checkbox" name="is_estimated_price" value="1" class="rounded border-slate-300 text-emerald-800">
                                     <span>Prix estimé</span>
                                 </label>
                             </div>
                         </div>
 
                         <!-- Champs Fournisseur, Facture & Date d'entrée -->
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
                                 <input type="text" name="supplier" placeholder="ex: Rexel, Leroy Merlin..." class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
@@ -250,10 +255,10 @@ ENTRY_TEMPLATE = (
 
                         <div>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Photo de l'article</label>
-                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700">
+                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-900">
                         </div>
 
-                        <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
+                        <button type="submit" class="w-full bg-forest hover:bg-forest-light text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
                             Valider l'Entrée
                         </button>
                     </form>
@@ -301,18 +306,18 @@ ENTRY_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# --- 2. PAGE DE SUIVI DES DONNÉES ---
+# --- 2. PAGE DE SUIVI DES DONNÉES ET INVENTAIRE PAR LIEU ---
 STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="space-y-6">
-        <div class="bg-slate-900 text-white rounded-lg p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div class="bg-forest text-white rounded-lg p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-emerald-900">
             <div>
-                <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Valeur totale de l'inventaire</span>
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-200">Valeur totale de l'inventaire</span>
                 <div class="text-2xl font-extrabold text-white mt-0.5">{{ "%.2f"|format(total_stock_value) }} €</div>
             </div>
             <div class="flex gap-2 no-print">
-                <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-4 py-2 rounded border border-slate-700 transition">
+                <button onclick="window.print()" class="bg-forest-light hover:bg-emerald-900 text-xs font-semibold px-4 py-2 rounded border border-emerald-700 text-white transition">
                     🖨️ Imprimer / PDF
                 </button>
             </div>
@@ -320,7 +325,7 @@ STOCK_TEMPLATE = (
 
         <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
             <form method="GET" action="/stock" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none">
+                <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                 <select name="loc_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="">Tous les emplacements</option>
                     {% for loc in locations %}
@@ -334,7 +339,7 @@ STOCK_TEMPLATE = (
                     {% endfor %}
                 </select>
                 <div class="flex gap-2">
-                    <button type="submit" class="flex-1 bg-slate-900 text-white text-xs font-semibold py-2 rounded hover:bg-slate-800">Filtrer</button>
+                    <button type="submit" class="flex-1 bg-forest text-white text-xs font-semibold py-2 rounded hover:bg-forest-light transition">Filtrer</button>
                     {% if search_query or current_loc or current_eq %}
                     <a href="/stock" class="px-3 py-2 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center">Effacer</a>
                     {% endif %}
@@ -342,75 +347,94 @@ STOCK_TEMPLATE = (
             </form>
         </div>
 
-        <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse text-xs print-table">
-                    <thead>
-                        <tr class="bg-slate-900 text-white border-b border-slate-800 uppercase font-semibold text-[11px] tracking-wider">
-                            <th class="p-3 border-r border-slate-800">Statut</th>
-                            <th class="p-3 border-r border-slate-800">N° Article</th>
-                            <th class="p-3 border-r border-slate-800">Nom de l'article</th>
-                            <th class="p-3 border-r border-slate-800">Fournisseur / Facture</th>
-                            <th class="p-3 border-r border-slate-800">Emplacement</th>
-                            <th class="p-3 border-r border-slate-800 text-right">Prix Unit.</th>
-                            <th class="p-3 border-r border-slate-800 text-center">Stock Mini</th>
-                            <th class="p-3 border-r border-slate-800 text-center">Quantité</th>
-                            <th class="p-3 text-right">Valeur Totale</th>
-                            <th class="p-3 text-center no-print">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-200">
-                        {% for item in articles %}
-                        <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
-                            <td class="p-3 font-bold border-r border-slate-200">
-                                {% if item.quantity < item.min_threshold %}
-                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
-                                {% else %}
-                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-semibold uppercase">OK</span>
-                                {% endif %}
-                            </td>
-                            <td class="p-3 font-mono text-slate-500 border-r border-slate-200">{{ item.reference or '-' }}</td>
-                            <td class="p-3 font-semibold text-slate-900 border-r border-slate-200">
-                                {{ item.name }}
-                                {% if item.is_estimated_price %}
-                                <span class="text-[9px] text-amber-700 bg-amber-50 px-1 rounded ml-1 font-normal">(Est.)</span>
-                                {% endif %}
-                            </td>
-                            <td class="p-3 text-slate-600 border-r border-slate-200">
-                                <div class="font-medium text-slate-900">{{ item.supplier or '-' }}</div>
-                                <div class="text-[10px] text-slate-400">Fac: {{ item.invoice_number or '-' }} (Entrée: {{ item.entry_date or '-' }})</div>
-                            </td>
-                            <td class="p-3 text-slate-600 border-r border-slate-200">{{ item.loc_name or 'Non assigné' }}</td>
-                            <td class="p-3 text-right text-slate-700 border-r border-slate-200 font-mono">{{ "%.2f"|format(item.price) }} €</td>
-                            <td class="p-3 text-center font-bold text-slate-600 border-r border-slate-200 bg-slate-50/50">{{ item.min_threshold }}</td>
-                            <td class="p-3 text-center font-extrabold text-slate-900 border-r border-slate-200">{{ item.quantity }}</td>
-                            <td class="p-3 text-right font-bold text-slate-900 font-mono">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
-                            <td class="p-3 text-center no-print">
-                                <div class="flex items-center justify-center gap-2">
-                                    <a href="/edit/{{ item.id }}" class="text-blue-600 hover:underline font-semibold text-xs">✏️ Modif</a>
-                                    <form action="/update/{{ item.id }}" method="POST" class="inline">
-                                        <input type="hidden" name="action" value="minus">
-                                        <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">-</button>
-                                    </form>
-                                    <form action="/update/{{ item.id }}" method="POST" class="inline">
-                                        <input type="hidden" name="action" value="plus">
-                                        <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
-                                    </form>
-                                    <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer cet article ?');" class="inline ml-1">
-                                        <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
-                                    </form>
-                                </div>
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="10" class="p-6 text-center text-slate-400 text-xs">Aucune donnée disponible dans le tableau.</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+        <!-- RESTRUCTURATION : INVENTAIRE GROUPÉ PAR LIEU DE STOCKAGE -->
+        {% if grouped_articles %}
+            {% for group in grouped_articles %}
+            <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden mb-6">
+                <!-- En-tête du Lieu (Aux couleurs de la charte verte) -->
+                <div class="bg-forest text-white px-4 py-3 flex justify-between items-center border-b border-emerald-900">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base text-emerald-300">📍</span>
+                        <h2 class="text-sm font-bold tracking-wide uppercase">{{ group.location_name }}</h2>
+                        <span class="text-[11px] bg-forest-light text-emerald-200 px-2 py-0.5 rounded-full font-semibold border border-emerald-800">
+                            {{ group.items|length }} article(s)
+                        </span>
+                    </div>
+                    <div class="text-xs font-semibold text-emerald-300">
+                        Valeur Lieu : {{ "%.2f"|format(group.total_value) }} €
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-xs print-table">
+                        <thead>
+                            <tr class="bg-emerald-50/60 text-slate-700 border-b border-slate-200 uppercase font-semibold text-[10px] tracking-wider">
+                                <th class="p-2.5 border-r border-slate-200">Statut</th>
+                                <th class="p-2.5 border-r border-slate-200">N° Article</th>
+                                <th class="p-2.5 border-r border-slate-200">Désignation</th>
+                                <th class="p-2.5 border-r border-slate-200">Fournisseur / Facture</th>
+                                <th class="p-2.5 border-r border-slate-200">Équipement</th>
+                                <th class="p-2.5 border-r border-slate-200 text-right">Prix Unit.</th>
+                                <th class="p-2.5 border-r border-slate-200 text-center">Stock Mini</th>
+                                <th class="p-2.5 border-r border-slate-200 text-center">Quantité</th>
+                                <th class="p-2.5 text-right border-r border-slate-200">Valeur Totale</th>
+                                <th class="p-2.5 text-center no-print">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200">
+                            {% for item in group.items %}
+                            <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50/60{% endif %} transition">
+                                <td class="p-2.5 font-bold border-r border-slate-200">
+                                    {% if item.quantity < item.min_threshold %}
+                                    <span class="px-2 py-0.5 rounded text-[9px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
+                                    {% else %}
+                                    <span class="px-2 py-0.5 rounded text-[9px] bg-emerald-100 text-emerald-900 font-semibold uppercase">OK</span>
+                                    {% endif %}
+                                </td>
+                                <td class="p-2.5 font-mono text-slate-500 border-r border-slate-200">{{ item.reference or '-' }}</td>
+                                <td class="p-2.5 font-semibold text-slate-900 border-r border-slate-200">
+                                    {{ item.name }}
+                                    {% if item.is_estimated_price %}
+                                    <span class="text-[9px] text-amber-700 bg-amber-50 px-1 rounded ml-1 font-normal">(Est.)</span>
+                                    {% endif %}
+                                </td>
+                                <td class="p-2.5 text-slate-600 border-r border-slate-200">
+                                    <div class="font-medium text-slate-900">{{ item.supplier or '-' }}</div>
+                                    <div class="text-[9px] text-slate-400">Fac: {{ item.invoice_number or '-' }} (Entrée: {{ item.entry_date or '-' }})</div>
+                                </td>
+                                <td class="p-2.5 text-slate-600 border-r border-slate-200">{{ item.eq_name or '-' }}</td>
+                                <td class="p-2.5 text-right text-slate-700 border-r border-slate-200 font-mono">{{ "%.2f"|format(item.price) }} €</td>
+                                <td class="p-2.5 text-center font-bold text-slate-600 border-r border-slate-200 bg-slate-50/50">{{ item.min_threshold }}</td>
+                                <td class="p-2.5 text-center font-extrabold text-slate-900 border-r border-slate-200">{{ item.quantity }}</td>
+                                <td class="p-2.5 text-right font-bold text-slate-900 font-mono border-r border-slate-200">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
+                                <td class="p-2.5 text-center no-print">
+                                    <div class="flex items-center justify-center gap-1.5">
+                                        <a href="/edit/{{ item.id }}" class="text-emerald-800 hover:underline font-semibold text-xs">✏️ Modif</a>
+                                        <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                            <input type="hidden" name="action" value="minus">
+                                            <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">-</button>
+                                        </form>
+                                        <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                            <input type="hidden" name="action" value="plus">
+                                            <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
+                                        </form>
+                                        <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer cet article ?');" class="inline ml-1">
+                                            <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
+            {% endfor %}
+        {% else %}
+            <div class="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-400 text-xs shadow-sm">
+                Aucun article ne correspond à votre recherche ou l'inventaire est vide.
+            </div>
+        {% endif %}
     </div>
 """
     + LAYOUT_FOOTER
@@ -424,18 +448,18 @@ EDIT_ARTICLE_TEMPLATE = (
         <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4">
             <div class="flex justify-between items-center pb-3 border-b border-slate-200">
                 <h1 class="text-base font-bold text-slate-900">✏️ Modifier l'Article</h1>
-                <a href="/stock" class="text-xs text-slate-500 hover:underline">← Retour au tableau</a>
+                <a href="/stock" class="text-xs text-emerald-800 hover:underline font-semibold">← Retour au tableau</a>
             </div>
 
             <form action="/edit/{{ article.id }}" method="POST" enctype="multipart/form-data" class="space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div class="sm:col-span-2">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Désignation / Nom *</label>
-                        <input type="text" name="name" value="{{ article.name }}" required class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:ring-1 focus:ring-slate-900">
+                        <input type="text" name="name" value="{{ article.name }}" required class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
-                        <input type="text" name="reference" value="{{ article.reference or '' }}" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:ring-1 focus:ring-slate-900">
+                        <input type="text" name="reference" value="{{ article.reference or '' }}" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     </div>
                 </div>
 
@@ -454,13 +478,13 @@ EDIT_ARTICLE_TEMPLATE = (
                     </div>
                     <div class="flex items-end pb-2">
                         <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
-                            <input type="checkbox" name="is_estimated_price" value="1" {% if article.is_estimated_price %}checked{% endif %} class="rounded border-slate-300 text-slate-900">
+                            <input type="checkbox" name="is_estimated_price" value="1" {% if article.is_estimated_price %}checked{% endif %} class="rounded border-slate-300 text-emerald-800">
                             <span>Prix estimé</span>
                         </label>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
                         <input type="text" name="supplier" value="{{ article.supplier or '' }}" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
@@ -502,7 +526,7 @@ EDIT_ARTICLE_TEMPLATE = (
                 </div>
 
                 <div class="flex gap-3 pt-2">
-                    <button type="submit" class="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs">Mettre à jour l'article</button>
+                    <button type="submit" class="flex-1 bg-forest hover:bg-forest-light text-white font-semibold py-2.5 rounded text-xs transition">Mettre à jour l'article</button>
                     <a href="/stock" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded text-center">Annuler</a>
                 </div>
             </form>
@@ -529,16 +553,16 @@ SETTINGS_TEMPLATE = (
                     📍 Emplacements de Stockage
                 </h2>
                 <form action="/add_location" method="POST" class="flex gap-2">
-                    <input type="text" name="name" required placeholder="Nouveau lieu..." class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none">
-                    <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded text-xs font-semibold">Ajouter</button>
+                    <input type="text" name="name" required placeholder="Nouveau lieu..." class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
+                    <button type="submit" class="bg-forest hover:bg-forest-light text-white px-3 py-2 rounded text-xs font-semibold transition">Ajouter</button>
                 </form>
 
                 <div class="divide-y divide-slate-100 text-xs pt-2">
                     {% for loc in locations %}
                     <div class="py-2.5 flex justify-between items-center">
                         <form action="/edit_location/{{ loc.id }}" method="POST" class="flex items-center gap-2 flex-grow mr-2">
-                            <input type="text" name="name" value="{{ loc.name }}" required class="text-xs p-1 border border-transparent hover:border-slate-300 focus:border-slate-900 rounded flex-grow font-semibold text-slate-700">
-                            <button type="submit" class="text-blue-600 hover:underline text-[11px] font-medium">Sauvegarder</button>
+                            <input type="text" name="name" value="{{ loc.name }}" required class="text-xs p-1 border border-transparent hover:border-slate-300 focus:border-emerald-700 rounded flex-grow font-semibold text-slate-700">
+                            <button type="submit" class="text-emerald-800 hover:underline text-[11px] font-medium">Sauvegarder</button>
                         </form>
                         <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer ce lieu ?');">
                             <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
@@ -556,14 +580,14 @@ SETTINGS_TEMPLATE = (
                     ⚙️ Équipements & Machines
                 </h2>
                 <form action="/add_equipment" method="POST" class="space-y-2">
-                    <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none">
+                    <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     <select name="location_id" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
                         <option value="">-- Rattacher à un emplacement --</option>
                         {% for loc in locations %}
                         <option value="{{ loc.id }}">{{ loc.name }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white py-2 rounded text-xs font-semibold">Ajouter l'Équipement</button>
+                    <button type="submit" class="w-full bg-forest hover:bg-forest-light text-white py-2 rounded text-xs font-semibold transition">Ajouter l'Équipement</button>
                 </form>
 
                 <div class="divide-y divide-slate-100 text-xs pt-2">
@@ -571,8 +595,8 @@ SETTINGS_TEMPLATE = (
                     <div class="py-3 space-y-1">
                         <form action="/edit_equipment/{{ eq.id }}" method="POST" class="space-y-1.5">
                             <div class="flex gap-2">
-                                <input type="text" name="name" value="{{ eq.name }}" required class="text-xs p-1 border border-slate-200 rounded flex-grow font-semibold text-slate-800">
-                                <button type="submit" class="text-blue-600 hover:underline text-[11px] font-medium">Sauvegarder</button>
+                                <input type="text" name="name" value="{{ eq.name }}" required class="text-xs p-1 border border-slate-200 rounded flex-grow font-semibold text-slate-800 focus:border-emerald-700">
+                                <button type="submit" class="text-emerald-800 hover:underline text-[11px] font-medium">Sauvegarder</button>
                             </div>
                             <div class="flex justify-between items-center">
                                 <select name="location_id" class="text-[11px] p-1 border border-slate-200 rounded bg-white text-slate-600">
@@ -657,7 +681,7 @@ def stock_view():
   eq_filter = request.args.get("eq_filter")
 
   query = """
-        SELECT a.*, l.name as loc_name, e.name as eq_name 
+        SELECT a.*, COALESCE(l.name, 'Non assigné') as loc_name, e.name as eq_name 
         FROM articles a
         LEFT JOIN locations l ON a.location_id = l.id
         LEFT JOIN equipment e ON a.equipment_id = e.id
@@ -675,19 +699,39 @@ def stock_view():
     query += " AND a.equipment_id = %s"
     params.append(eq_filter)
 
-  query += " ORDER BY a.name"
+  query += " ORDER BY loc_name ASC, a.name ASC"
   cur.execute(query, params)
   articles = cur.fetchall()
   cur.close()
 
   filtered_total_val = calculate_total_stock_value(articles)
 
+  # Groupement dynamique par lieu de stockage
+  grouped_dict = {}
+  for item in articles:
+    loc_name = item["loc_name"]
+    if loc_name not in grouped_dict:
+      grouped_dict[loc_name] = {"items": [], "total_value": 0.0}
+    grouped_dict[loc_name]["items"].append(item)
+    grouped_dict[loc_name]["total_value"] += item["quantity"] * (
+        item["price"] or 0.0
+    )
+
+  grouped_articles = [
+      {
+          "location_name": loc_name,
+          "items": data["items"],
+          "total_value": data["total_value"],
+      }
+      for loc_name, data in grouped_dict.items()
+  ]
+
   return render_template_string(
       STOCK_TEMPLATE,
       active_page="stock",
       locations=locations,
       equipment=equipment,
-      articles=articles,
+      grouped_articles=grouped_articles,
       search_query=search_query,
       current_loc=loc_filter,
       current_eq=eq_filter,
