@@ -306,7 +306,7 @@ ENTRY_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
-# --- 2. PAGE DE SUIVI DES DONNÉES ET INVENTAIRE PAR LIEU ---
+# --- 2. PAGE DE SUIVI DES DONNÉES ET INVENTAIRE PAR LIEU (Corrigé avec group['items']) ---
 STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
@@ -357,7 +357,7 @@ STOCK_TEMPLATE = (
                         <span class="text-base text-emerald-300">📍</span>
                         <h2 class="text-sm font-bold tracking-wide uppercase">{{ group.location_name }}</h2>
                         <span class="text-[11px] bg-forest-light text-emerald-200 px-2 py-0.5 rounded-full font-semibold border border-emerald-800">
-                            {{ group.items | length }} article(s)
+                            {{ group['items'] | length }} article(s)
                         </span>
                     </div>
                     <div class="text-xs font-semibold text-emerald-300">
@@ -382,7 +382,7 @@ STOCK_TEMPLATE = (
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200">
-                            {% for item in group.items %}
+                            {% for item in group['items'] %}
                             <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50/60{% endif %} transition">
                                 <td class="p-2.5 font-bold border-r border-slate-200">
                                     {% if item.quantity < item.min_threshold %}
