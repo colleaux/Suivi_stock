@@ -77,7 +77,6 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-  # Mises à jour de sécurité si les tables existaient déjà
   cursor.execute("""
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS min_threshold INTEGER DEFAULT 2;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS supplier TEXT;
@@ -362,9 +361,10 @@ STOCK_TEMPLATE = (
                     </thead>
                     <tbody class="divide-y divide-slate-200">
                         {% for item in articles %}
-                        <tr class="{% if item.quantity <= item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
+                        <!-- Statut OK si quantité >= stock mini, RECOMMANDER si inférieur -->
+                        <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
                             <td class="p-3 font-bold border-r border-slate-200">
-                                {% if item.quantity <= item.min_threshold %}
+                                {% if item.quantity < item.min_threshold %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
                                 {% else %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-semibold uppercase">OK</span>
@@ -964,7 +964,6 @@ def movement_exit():
     cur.execute(
         "UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, article_id)
     )
-    # Enregistrement du mouvement de sortie avec horodatage automatique de la date de sortie (CURRENT_TIMESTAMP)
     cur.execute(
         """
             INSERT INTO movements (article_id, type, quantity, reason, date) 
