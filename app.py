@@ -157,7 +157,7 @@ LAYOUT_FOOTER = """
 # --- 1. PAGE DE SAISIE DE DONNÉES ---
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
-    + f"""
+    + """
     <div class="max-w-3xl mx-auto space-y-6">
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 flex justify-between items-center">
             <div>
@@ -223,7 +223,7 @@ ENTRY_TEMPLATE = (
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Date d'entrée</label>
-                                <input type="date" name="entry_date" value="{datetime.date.today().strftime('%Y-%m-%d')}" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
+                                <input type="date" name="entry_date" value="" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
                             </div>
                         </div>
 
@@ -232,18 +232,18 @@ ENTRY_TEMPLATE = (
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement du stock</label>
                                 <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                     <option value="">-- Sélectionner un lieu --</option>
-                                    {{% for loc in locations %}}
+                                    {% for loc in locations %}
                                     <option value="{{ loc.id }}">{{ loc.name }}</option>
-                                    {{% endfor %}}
+                                    {% endfor %}
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Équipement associé</label>
                                 <select name="equipment_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                     <option value="">-- Sélectionner une machine --</option>
-                                    {{% for eq in equipment %}}
+                                    {% for eq in equipment %}
                                     <option value="{{ eq.id }}">{{ eq.name }}</option>
-                                    {{% endfor %}}
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
@@ -272,9 +272,9 @@ ENTRY_TEMPLATE = (
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
                             <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                 <option value="">-- Choisir une pièce --</option>
-                                {{% for item in articles %}}
+                                {% for item in articles %}
                                 <option value="{{ item.id }}">{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
-                                {{% endfor %}}
+                                {% endfor %}
                             </select>
                         </div>
 
@@ -361,7 +361,6 @@ STOCK_TEMPLATE = (
                     </thead>
                     <tbody class="divide-y divide-slate-200">
                         {% for item in articles %}
-                        <!-- Statut OK si quantité >= stock mini, RECOMMANDER si inférieur -->
                         <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
                             <td class="p-3 font-bold border-r border-slate-200">
                                 {% if item.quantity < item.min_threshold %}
