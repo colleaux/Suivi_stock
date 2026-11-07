@@ -78,7 +78,7 @@ with app.app_context():
   init_db()
 
 
-# --- CHARTE GRAPHIQUE CORPORATE & LAYOUT UNIFIÉ ---
+# --- LAYOUT UNIFIÉ & CHARTE GRAPHIQUE ---
 
 LAYOUT_HEADER = """
 <!DOCTYPE html>
@@ -102,7 +102,6 @@ LAYOUT_HEADER = """
     <header class="bg-slate-900 text-white shadow-md border-b border-slate-800 no-print">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
-                <!-- Branding -->
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 bg-slate-700 rounded-lg flex items-center justify-center font-bold text-slate-200">
                         📦
@@ -113,7 +112,6 @@ LAYOUT_HEADER = """
                     </div>
                 </div>
 
-                <!-- Navigation 3 Liens Clés -->
                 <nav class="flex space-x-1 sm:space-x-2">
                     <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-slate-800 text-amber-400 border border-slate-700{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                         <span>✏️</span> Saisie
@@ -129,14 +127,11 @@ LAYOUT_HEADER = """
         </div>
     </header>
 
-    <!-- Content Container -->
     <main class="flex-grow max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
 """
 
 LAYOUT_FOOTER = """
     </main>
-
-    <!-- Footer -->
     <footer class="bg-slate-900 text-slate-500 text-[11px] py-4 border-t border-slate-800 text-center no-print mt-auto">
         Système de Gestion de Stock & Operations | Facility Management
     </footer>
@@ -144,12 +139,11 @@ LAYOUT_FOOTER = """
 </html>
 """
 
-# --- 1. PAGE DE SAISIE DE DONNÉES (ENTRÉE / SORTIE) ---
+# --- 1. PAGE DE SAISIE DE DONNÉES ---
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="max-w-3xl mx-auto space-y-6">
-        <!-- Bandeau d'en-tête -->
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 flex justify-between items-center">
             <div>
                 <h1 class="text-base font-bold text-slate-900">Saisie des Mouvements</h1>
@@ -157,7 +151,6 @@ ENTRY_TEMPLATE = (
             </div>
         </div>
 
-        <!-- Formulaire avec Onglets d'action -->
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
             <div class="bg-slate-900 px-6 py-3 border-b border-slate-800 flex gap-4">
                 <span class="text-xs font-bold text-white uppercase tracking-wider">Formulaire d'enregistrement</span>
@@ -283,7 +276,6 @@ STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="space-y-6">
-        <!-- Bandeau Synthèse -->
         <div class="bg-slate-900 text-white rounded-lg p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
                 <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Valeur totale de l'inventaire</span>
@@ -296,7 +288,6 @@ STOCK_TEMPLATE = (
             </div>
         </div>
 
-        <!-- Filtres Tableur -->
         <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
             <form method="GET" action="/stock" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none">
@@ -321,7 +312,6 @@ STOCK_TEMPLATE = (
             </form>
         </div>
 
-        <!-- Tableau inspiré de la charte Excel -->
         <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs print-table">
@@ -340,7 +330,6 @@ STOCK_TEMPLATE = (
                     </thead>
                     <tbody class="divide-y divide-slate-200">
                         {% for item in articles %}
-                        <!-- Alerte visuelle Corail/Pêche pour stock critique (<=2) -->
                         <tr class="{% if item.quantity <= 2 %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50{% endif %} transition">
                             <td class="p-3 font-bold border-r border-slate-200">
                                 {% if item.quantity <= 2 %}
@@ -363,6 +352,7 @@ STOCK_TEMPLATE = (
                             <td class="p-3 text-right font-bold text-slate-900 font-mono">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
                             <td class="p-3 text-center no-print">
                                 <div class="flex items-center justify-center gap-2">
+                                    <a href="/edit/{{ item.id }}" class="text-blue-600 hover:underline font-semibold text-xs">✏️ Modif</a>
                                     <form action="/update/{{ item.id }}" method="POST" class="inline">
                                         <input type="hidden" name="action" value="minus">
                                         <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">-</button>
@@ -371,7 +361,7 @@ STOCK_TEMPLATE = (
                                         <input type="hidden" name="action" value="plus">
                                         <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
                                     </form>
-                                    <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer ?');" class="inline ml-2">
+                                    <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer cet article ?');" class="inline ml-1">
                                         <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
                                     </form>
                                 </div>
@@ -391,6 +381,83 @@ STOCK_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
+# --- EDIT ARTICLE TEMPLATE ---
+EDIT_ARTICLE_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <div class="max-w-2xl mx-auto space-y-6">
+        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-200">
+                <h1 class="text-base font-bold text-slate-900">✏️ Modifier l'Article</h1>
+                <a href="/stock" class="text-xs text-slate-500 hover:underline">← Retour au tableau</a>
+            </div>
+
+            <form action="/edit/{{ article.id }}" method="POST" enctype="multipart/form-data" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="sm:col-span-2">
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Désignation / Nom *</label>
+                        <input type="text" name="name" value="{{ article.name }}" required class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:ring-1 focus:ring-slate-900">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
+                        <input type="text" name="reference" value="{{ article.reference or '' }}" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:ring-1 focus:ring-slate-900">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité *</label>
+                        <input type="number" name="quantity" value="{{ article.quantity }}" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Prix Unitaire (€)</label>
+                        <input type="number" step="0.01" name="price" value="{{ article.price }}" required class="w-full text-xs p-2.5 border border-slate-300 rounded">
+                    </div>
+                    <div class="flex items-end pb-2">
+                        <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                            <input type="checkbox" name="is_estimated_price" value="1" {% if article.is_estimated_price %}checked{% endif %} class="rounded border-slate-300 text-slate-900">
+                            <span>Prix estimé</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement</label>
+                        <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
+                            <option value="">-- Aucun --</option>
+                            {% for loc in locations %}
+                            <option value="{{ loc.id }}" {% if article.location_id == loc.id %}selected{% endif %}>{{ loc.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Équipement</label>
+                        <select name="equipment_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
+                            <option value="">-- Aucun --</option>
+                            {% for eq in equipment %}
+                            <option value="{{ eq.id }}" {% if article.equipment_id == eq.id %}selected{% endif %}>{{ eq.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Remplacer la photo (Optionnel)</label>
+                    <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500">
+                </div>
+
+                <div class="flex gap-3 pt-2">
+                    <button type="submit" class="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs">Mettre à jour l'article</button>
+                    <a href="/stock" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded text-center">Annuler</a>
+                </div>
+            </form>
+        </div>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
+
 # --- 3. PAGE DE RÉGLAGES (GESTION LIEUX & ÉQUIPEMENTS) ---
 SETTINGS_TEMPLATE = (
     LAYOUT_HEADER
@@ -398,25 +465,28 @@ SETTINGS_TEMPLATE = (
     <div class="max-w-4xl mx-auto space-y-6">
         <div class="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
             <h1 class="text-base font-bold text-slate-900">Réglages & Configuration</h1>
-            <p class="text-xs text-slate-500">Gérez les emplacements physiques de stockage et les équipements/machines associés</p>
+            <p class="text-xs text-slate-500">Gérez et modifiez les emplacements physiques et les équipements associés</p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Gestion des Emplacements -->
+            <!-- Emplacements -->
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
                     📍 Emplacements de Stockage
                 </h2>
                 <form action="/add_location" method="POST" class="flex gap-2">
-                    <input type="text" name="name" required placeholder="ex: Atelier A, Étagère 2" class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none">
+                    <input type="text" name="name" required placeholder="Nouveau lieu..." class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none">
                     <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded text-xs font-semibold">Ajouter</button>
                 </form>
 
                 <div class="divide-y divide-slate-100 text-xs pt-2">
                     {% for loc in locations %}
                     <div class="py-2.5 flex justify-between items-center">
-                        <span class="font-semibold text-slate-700">{{ loc.name }}</span>
-                        <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer cet emplacement ?');">
+                        <form action="/edit_location/{{ loc.id }}" method="POST" class="flex items-center gap-2 flex-grow mr-2">
+                            <input type="text" name="name" value="{{ loc.name }}" required class="text-xs p-1 border border-transparent hover:border-slate-300 focus:border-slate-900 rounded flex-grow font-semibold text-slate-700">
+                            <button type="submit" class="text-blue-600 hover:underline text-[11px] font-medium">Sauvegarder</button>
+                        </form>
+                        <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer ce lieu ?');">
                             <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
                         </form>
                     </div>
@@ -426,14 +496,14 @@ SETTINGS_TEMPLATE = (
                 </div>
             </div>
 
-            <!-- Gestion des Équipements -->
+            <!-- Équipements -->
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
                     ⚙️ Équipements & Machines
                 </h2>
                 <form action="/add_equipment" method="POST" class="space-y-2">
                     <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none">
-                    <select name="location_id" required class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                    <select name="location_id" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
                         <option value="">-- Rattacher à un emplacement --</option>
                         {% for loc in locations %}
                         <option value="{{ loc.id }}">{{ loc.name }}</option>
@@ -444,14 +514,23 @@ SETTINGS_TEMPLATE = (
 
                 <div class="divide-y divide-slate-100 text-xs pt-2">
                     {% for eq in equipment %}
-                    <div class="py-2.5 flex justify-between items-center">
-                        <div>
-                            <span class="font-semibold text-slate-800 block">{{ eq.name }}</span>
-                            <span class="text-[10px] text-slate-500">📍 {{ eq.loc_name or 'Aucun lieu' }}</span>
-                        </div>
-                        <form action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');">
-                            <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
+                    <div class="py-3 space-y-1">
+                        <form action="/edit_equipment/{{ eq.id }}" method="POST" class="space-y-1.5">
+                            <div class="flex gap-2">
+                                <input type="text" name="name" value="{{ eq.name }}" required class="text-xs p-1 border border-slate-200 rounded flex-grow font-semibold text-slate-800">
+                                <button type="submit" class="text-blue-600 hover:underline text-[11px] font-medium">Sauvegarder</button>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <select name="location_id" class="text-[11px] p-1 border border-slate-200 rounded bg-white text-slate-600">
+                                    <option value="">-- Aucun lieu --</option>
+                                    {% for loc in locations %}
+                                    <option value="{{ loc.id }}" {% if eq.location_id == loc.id %}selected{% endif %}>📍 {{ loc.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" form="del_eq_{{ eq.id }}" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
+                            </div>
                         </form>
+                        <form id="del_eq_{{ eq.id }}" action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');"></form>
                     </div>
                     {% else %}
                     <p class="text-slate-400 text-xs italic">Aucun équipement configuré.</p>
@@ -465,7 +544,7 @@ SETTINGS_TEMPLATE = (
 )
 
 
-# --- ROUTES FLASK CORRESPONDANTES ---
+# --- ROUTES FLASK ---
 
 
 def calculate_total_stock_value(articles_list=None):
@@ -562,6 +641,86 @@ def stock_view():
   )
 
 
+@app.route("/edit/<int:id>", methods=["GET", "POST"])
+def edit_article(id):
+  db = get_db()
+  cur = db.cursor()
+
+  if request.method == "POST":
+    name = request.form["name"].strip()
+    reference = request.form.get("reference")
+    quantity = int(request.form.get("quantity", 0))
+    price = float(request.form.get("price") or 0.0)
+    is_estimated_price = 1 if "is_estimated_price" in request.form else 0
+    location_id = request.form.get("location_id") or None
+    equipment_id = request.form.get("equipment_id") or None
+
+    if "photo" in request.files and request.files["photo"].filename != "":
+      file = request.files["photo"]
+      if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filename = f"art_{os.urandom(4).hex()}_{filename}"
+        file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        cur.execute(
+            """
+                UPDATE articles SET name=%s, reference=%s, quantity=%s, price=%s, 
+                is_estimated_price=%s, location_id=%s, equipment_id=%s, image_filename=%s
+                WHERE id=%s
+            """,
+            (
+                name,
+                reference,
+                quantity,
+                price,
+                is_estimated_price,
+                location_id,
+                equipment_id,
+                filename,
+                id,
+            ),
+        )
+    else:
+      cur.execute(
+          """
+            UPDATE articles SET name=%s, reference=%s, quantity=%s, price=%s, 
+            is_estimated_price=%s, location_id=%s, equipment_id=%s
+            WHERE id=%s
+        """,
+          (
+              name,
+              reference,
+              quantity,
+              price,
+              is_estimated_price,
+              location_id,
+              equipment_id,
+              id,
+          ),
+      )
+
+    db.commit()
+    cur.close()
+    return redirect(url_for("stock_view"))
+
+  cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
+  article = cur.fetchone()
+  cur.execute("SELECT * FROM locations ORDER BY name")
+  locations = cur.fetchall()
+  cur.execute("SELECT * FROM equipment ORDER BY name")
+  equipment = cur.fetchall()
+  cur.close()
+  total_val = calculate_total_stock_value()
+
+  return render_template_string(
+      EDIT_ARTICLE_TEMPLATE,
+      active_page="stock",
+      article=article,
+      locations=locations,
+      equipment=equipment,
+      total_stock_value=total_val,
+  )
+
+
 @app.route("/settings")
 def settings_view():
   db = get_db()
@@ -598,6 +757,18 @@ def add_location():
   return redirect(url_for("settings_view"))
 
 
+@app.route("/edit_location/<int:id>", methods=["POST"])
+def edit_location(id):
+  db = get_db()
+  cur = db.cursor()
+  name = request.form["name"].strip()
+  if name:
+    cur.execute("UPDATE locations SET name = %s WHERE id = %s", (name, id))
+    db.commit()
+  cur.close()
+  return redirect(url_for("settings_view"))
+
+
 @app.route("/delete_location/<int:id>", methods=["POST"])
 def delete_location(id):
   db = get_db()
@@ -618,6 +789,22 @@ def add_equipment():
     cur.execute(
         "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
         (name, location_id),
+    )
+    db.commit()
+  cur.close()
+  return redirect(url_for("settings_view"))
+
+
+@app.route("/edit_equipment/<int:id>", methods=["POST"])
+def edit_equipment(id):
+  db = get_db()
+  cur = db.cursor()
+  name = request.form["name"].strip()
+  location_id = request.form.get("location_id") or None
+  if name:
+    cur.execute(
+        "UPDATE equipment SET name = %s, location_id = %s WHERE id = %s",
+        (name, location_id, id),
     )
     db.commit()
   cur.close()
