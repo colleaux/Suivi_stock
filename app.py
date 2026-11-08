@@ -55,9 +55,16 @@ LOGIN_TEMPLATE = """
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Connexion - Suivi Inventaire</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html { -webkit-text-size-adjust: 100%; }
+        @media (max-width: 767px) {
+            input { font-size: 16px !important; }
+            button { min-height: 44px; }
+        }
+    </style>
 </head>
 <body class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
     <main class="w-full max-w-sm bg-white rounded-lg shadow p-6">
@@ -416,7 +423,8 @@ LAYOUT_HEADER = """
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b3d2c">
     <title>Gestion & Suivi de Stock</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -424,12 +432,27 @@ LAYOUT_HEADER = """
             .no-print { display: none !important; }
             body { background: white !important; font-size: 11px; }
             .print-table { border: 1px solid #CBD5E1 !important; }
+            .print-table { min-width: 0 !important; }
             .page-break { page-break-before: always; }
         }
         .bg-forest { background-color: #0b3d2c; }
         .bg-forest-light { background-color: #124e38; }
         .border-forest { border-color: #0b3d2c; }
         .text-forest { color: #0b3d2c; }
+        html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+        body { overflow-x: hidden; }
+        input, select, textarea, button { max-width: 100%; }
+        button, a, input[type="checkbox"], input[type="file"] { touch-action: manipulation; }
+        input[type="checkbox"] { width: 1.25rem; height: 1.25rem; }
+        .print-table { min-width: 980px; }
+        .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+        @media (max-width: 767px) {
+            input:not([type="checkbox"]):not([type="file"]), select, textarea {
+                font-size: 16px !important;
+            }
+            button, input[type="submit"], select { min-height: 44px; }
+            .print-table { min-width: 920px; }
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
@@ -437,7 +460,7 @@ LAYOUT_HEADER = """
     <!-- Header / Navbar Principal -->
     <header class="bg-forest text-white shadow-md border-b border-emerald-900 no-print">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex items-center justify-between h-16">
+            <div class="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between md:h-16 md:py-0">
                 <div class="flex items-center gap-3">
                     <div class="w-9 h-9 bg-forest-light rounded-lg flex items-center justify-center font-bold text-emerald-300 border border-emerald-700 shadow-inner">
                         🌿
@@ -448,27 +471,27 @@ LAYOUT_HEADER = """
                     </div>
                 </div>
 
-                <nav class="flex space-x-1 sm:space-x-2">
-                    <span class="px-2 py-2 text-[10px] text-emerald-200">{{ g.current_user.username }}</span>
-                    <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                <nav class="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1">
+                    <span class="col-span-2 text-center px-2 py-1 text-[10px] text-emerald-200 sm:col-span-1">{{ g.current_user.username }}</span>
+                    <a href="/entry" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>✏️</span> Saisie
                     </a>
-                    <a href="/stock" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                    <a href="/stock" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>📊</span> Suivi & Rapport
                     </a>
-                    <a href="/settings" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                    <a href="/settings" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>⚙️</span> Réglages
                     </a>
-                    <form action="{{ url_for('logout') }}" method="POST" class="inline">
+                    <form action="{{ url_for('logout') }}" method="POST" class="col-span-2 sm:col-span-1">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button class="px-3 py-2 rounded-md text-xs font-semibold text-emerald-100 hover:bg-forest-light">Déconnexion</button>
+                        <button class="w-full min-h-11 px-3 py-2 rounded-md text-xs font-semibold text-emerald-100 hover:bg-forest-light">Déconnexion</button>
                     </form>
                 </nav>
             </div>
         </div>
     </header>
 
-    <main class="flex-grow max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+    <main class="flex-grow max-w-7xl w-full min-w-0 mx-auto p-3 sm:p-6 lg:p-8">
 """
 
 LAYOUT_FOOTER = """
@@ -497,7 +520,7 @@ ENTRY_TEMPLATE = (
                 <span class="text-xs font-bold text-white uppercase tracking-wider">Formulaire d'enregistrement</span>
             </div>
             
-            <div class="p-6 space-y-6">
+            <div class="p-4 sm:p-6 space-y-6">
                 <!-- Section Entrée -->
                 <div class="space-y-4">
                     <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
@@ -506,8 +529,8 @@ ENTRY_TEMPLATE = (
                     
                     <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <div class="sm:col-span-2">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="md:col-span-2">
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Nom de l'article *</label>
                                 <input type="text" name="name" required placeholder="ex: Disjoncteur 16A" class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                             </div>
@@ -517,7 +540,7 @@ ENTRY_TEMPLATE = (
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité initiale *</label>
                                 <input type="number" name="quantity" value="1" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
@@ -539,7 +562,7 @@ ENTRY_TEMPLATE = (
                         </div>
 
                         <!-- Champs Fournisseur, Facture & Date d'entrée -->
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
                                 <input type="text" name="supplier" placeholder="ex: Rexel, Leroy Merlin..." class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
@@ -554,7 +577,7 @@ ENTRY_TEMPLATE = (
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement du stock</label>
                                 <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
@@ -606,7 +629,7 @@ ENTRY_TEMPLATE = (
                             </select>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité sortie *</label>
                                 <input type="number" name="qty" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
@@ -634,7 +657,7 @@ STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="space-y-6">
-        <div class="bg-forest text-white rounded-lg p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-emerald-900">
+        <div class="bg-forest text-white rounded-lg p-4 sm:p-5 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-emerald-900">
             <div>
                 <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-200">Valeur totale de l'inventaire</span>
                 <div class="text-2xl font-extrabold text-white mt-0.5">{{ "%.2f"|format(total_stock_value) }} €</div>
@@ -647,7 +670,7 @@ STOCK_TEMPLATE = (
         </div>
 
         <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
-            <form method="GET" action="/stock" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <form method="GET" action="/stock" class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                 <select name="loc_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="">Tous les emplacements</option>
@@ -675,8 +698,8 @@ STOCK_TEMPLATE = (
             {% for group in grouped_articles %}
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden mb-6">
                 <!-- En-tête du Lieu -->
-                <div class="bg-forest text-white px-4 py-3 flex justify-between items-center border-b border-emerald-900">
-                    <div class="flex items-center gap-2">
+                <div class="bg-forest text-white px-4 py-3 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 border-b border-emerald-900">
+                    <div class="flex flex-wrap items-center gap-2">
                         <span class="text-base text-emerald-300">📍</span>
                         <h2 class="text-sm font-bold tracking-wide uppercase">{{ group.location_name }}</h2>
                         <span class="text-[11px] bg-forest-light text-emerald-200 px-2 py-0.5 rounded-full font-semibold border border-emerald-800">
@@ -779,8 +802,8 @@ EDIT_ARTICLE_TEMPLATE = (
 
             <form action="/edit/{{ article.id }}" method="POST" enctype="multipart/form-data" class="space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div class="sm:col-span-2">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="md:col-span-2">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Désignation / Nom *</label>
                         <input type="text" name="name" value="{{ article.name }}" required class="w-full text-xs p-2.5 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     </div>
@@ -790,7 +813,7 @@ EDIT_ARTICLE_TEMPLATE = (
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité *</label>
                         <input type="number" name="quantity" value="{{ article.quantity }}" min="0" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
@@ -811,7 +834,7 @@ EDIT_ARTICLE_TEMPLATE = (
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-emerald-50/40 p-3 rounded border border-emerald-100">
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Fournisseur</label>
                         <input type="text" name="supplier" value="{{ article.supplier or '' }}" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
@@ -826,7 +849,7 @@ EDIT_ARTICLE_TEMPLATE = (
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Emplacement</label>
                         <select name="location_id" class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
@@ -957,7 +980,7 @@ SETTINGS_TEMPLATE = (
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Gestion des utilisateurs</h2>
                 <p class="text-xs text-slate-500 mt-1">Les nouveaux comptes n'ont pas accès à la gestion des utilisateurs.</p>
             </div>
-            <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input name="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="Identifiant ou e-mail" title="3 à 64 caractères ; lettres, chiffres, point, tiret, souligné, @ ou +" class="text-xs p-2 border border-slate-300 rounded">
                 <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Mot de passe (12 caractères min.)" class="text-xs p-2 border border-slate-300 rounded">
