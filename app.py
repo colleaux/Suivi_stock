@@ -474,7 +474,7 @@ LAYOUT_HEADER = """
                 <nav class="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1">
                     <span class="col-span-2 text-center px-2 py-1 text-[10px] text-emerald-200 sm:col-span-1">{{ g.current_user.username }}</span>
                     <a href="/entry" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
-                        <span>✏️</span> Saisie
+                        <span>✏️</span> Entrée / Sortie
                     </a>
                     <a href="/stock" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>📊</span> Suivi & Rapport
@@ -507,25 +507,33 @@ LAYOUT_FOOTER = """
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
     + """
-    <div class="max-w-3xl mx-auto space-y-6">
-        <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 flex justify-between items-center">
-            <div>
-                <h1 class="text-base font-bold text-slate-900">Saisie des Mouvements</h1>
-                <p class="text-xs text-slate-500">Enregistrez de nouvelles entrées ou consommez du matériel pour intervention</p>
+    <div class="max-w-5xl mx-auto space-y-6">
+        <div class="rounded-xl bg-gradient-to-r from-emerald-950 to-emerald-800 p-5 sm:p-7 text-white shadow-md">
+            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Gestion des mouvements</p>
+            <h1 class="mt-1 text-2xl sm:text-3xl font-extrabold">Entrée et sortie de stock</h1>
+            <p class="mt-2 max-w-2xl text-sm text-emerald-100">Choisissez l’opération à effectuer. Chaque mouvement est enregistré dans l’historique de l’inventaire.</p>
+            <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <a href="#stock-entry" class="flex min-h-14 items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-left font-bold text-emerald-950 shadow transition hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-300">
+                    <span class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-xl" aria-hidden="true">＋</span>Entrée de Stock</span>
+                    <span aria-hidden="true">↓</span>
+                </a>
+                <a href="#stock-exit" class="flex min-h-14 items-center justify-between gap-3 rounded-lg border border-emerald-400 bg-emerald-900/50 px-4 py-3 text-left font-bold text-white transition hover:bg-emerald-900 focus:outline-none focus:ring-4 focus:ring-emerald-300">
+                    <span class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-full bg-amber-300 text-xl text-amber-950" aria-hidden="true">−</span>Sortie de Stock</span>
+                    <span aria-hidden="true">↓</span>
+                </a>
             </div>
         </div>
 
-        <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-            <div class="bg-forest px-6 py-3 border-b border-emerald-900 flex gap-4">
-                <span class="text-xs font-bold text-white uppercase tracking-wider">Formulaire d'enregistrement</span>
+        <section id="stock-entry" class="scroll-mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
+            <div class="flex items-start gap-4 border-b border-emerald-100 bg-emerald-50 p-4 sm:p-6">
+                <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-2xl font-bold text-white" aria-hidden="true">＋</span>
+                <div>
+                    <h2 class="text-lg font-extrabold text-emerald-950 sm:text-xl">Entrée de Stock</h2>
+                    <p class="mt-1 text-sm text-emerald-900">Ajoutez un nouvel article à l’inventaire et renseignez sa quantité initiale.</p>
+                </div>
             </div>
-            
-            <div class="p-4 sm:p-6 space-y-6">
-                <!-- Section Entrée -->
+            <div class="p-4 sm:p-6">
                 <div class="space-y-4">
-                    <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-emerald-600"></span> Entrée en stock / Nouvel Article
-                    </h2>
                     
                     <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -599,23 +607,37 @@ ENTRY_TEMPLATE = (
                         </div>
 
                         <div>
-                            <label class="block text-xs font-semibold text-slate-600 mb-1">Photo de l'article</label>
-                            <input type="file" name="photo" accept="image/*" class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-900">
+                            <label for="article-photo" class="mb-2 block text-sm font-bold text-slate-800">Photo de l’article <span class="font-normal text-slate-500">(facultatif)</span></label>
+                            <input id="article-photo" type="file" name="photo" accept="image/png,image/jpeg,image/webp" class="peer sr-only">
+                            <label for="article-photo" class="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-emerald-500 bg-emerald-50/70 px-4 py-5 text-center transition hover:border-emerald-700 hover:bg-emerald-50 peer-focus-visible:outline-none peer-focus-visible:ring-4 peer-focus-visible:ring-emerald-200">
+                                <span class="flex h-11 w-11 items-center justify-center rounded-full bg-white text-2xl shadow-sm" aria-hidden="true">📷</span>
+                                <span class="font-bold text-emerald-950">Ajouter une photo</span>
+                                <span class="text-xs text-slate-600">Touchez pour choisir une image · JPG, PNG ou WEBP · 5 Mo maximum</span>
+                            </label>
+                            <div id="article-photo-preview" class="mt-3 hidden items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <img id="article-photo-image" alt="Aperçu de la photo de l’article" class="h-16 w-16 rounded-md object-cover">
+                                <span id="article-photo-name" class="min-w-0 break-all text-sm font-medium text-slate-700"></span>
+                            </div>
                         </div>
 
-                        <button type="submit" class="w-full bg-forest hover:bg-forest-light text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
-                            Valider l'Entrée
+                        <button type="submit" class="w-full min-h-12 rounded-lg bg-emerald-800 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900">
+                            Enregistrer l’Entrée de Stock
                         </button>
                     </form>
                 </div>
+            </div>
+        </section>
 
-                <hr class="border-slate-200 my-6">
-
-                <!-- Section Sortie -->
+        <section id="stock-exit" class="scroll-mt-4 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
+            <div class="flex items-start gap-4 border-b border-amber-100 bg-amber-50 p-4 sm:p-6">
+                <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-amber-950" aria-hidden="true">−</span>
+                <div>
+                    <h2 class="text-lg font-extrabold text-amber-950 sm:text-xl">Sortie de Stock</h2>
+                    <p class="mt-1 text-sm text-amber-900">Enregistrez le matériel prélevé et indiquez la quantité ainsi que le motif.</p>
+                </div>
+            </div>
+            <div class="p-4 sm:p-6">
                 <div class="space-y-4">
-                    <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-amber-500"></span> Sortie de stock / Consommation (Date enregistrée automatiquement)
-                    </h2>
 
                     <form action="/movement_exit" method="POST" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -640,14 +662,39 @@ ENTRY_TEMPLATE = (
                             </div>
                         </div>
 
-                        <button type="submit" class="w-full bg-slate-700 hover:bg-slate-800 text-white font-semibold py-2.5 rounded text-xs transition shadow-sm">
-                            Enregistrer la Sortie (Date automatique)
+                        <button type="submit" class="w-full min-h-12 rounded-lg bg-amber-600 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-amber-700">
+                            Enregistrer la Sortie de Stock
                         </button>
                     </form>
                 </div>
             </div>
-        </div>
+        </section>
     </div>
+    <script>
+        (() => {
+            const input = document.getElementById("article-photo");
+            const preview = document.getElementById("article-photo-preview");
+            const image = document.getElementById("article-photo-image");
+            const filename = document.getElementById("article-photo-name");
+            let previewUrl = null;
+            input.addEventListener("change", () => {
+                if (previewUrl) URL.revokeObjectURL(previewUrl);
+                const file = input.files && input.files[0];
+                if (!file) {
+                    preview.classList.add("hidden");
+                    preview.classList.remove("flex");
+                    image.removeAttribute("src");
+                    filename.textContent = "";
+                    return;
+                }
+                previewUrl = URL.createObjectURL(file);
+                image.src = previewUrl;
+                filename.textContent = file.name;
+                preview.classList.remove("hidden");
+                preview.classList.add("flex");
+            });
+        })();
+    </script>
 """
     + LAYOUT_FOOTER
 )
