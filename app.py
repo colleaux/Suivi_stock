@@ -3,6 +3,7 @@ import hmac
 import io
 import math
 import os
+import re
 import secrets
 import warnings
 
@@ -12,6 +13,7 @@ from psycopg.rows import dict_row
 from flask import (
     Flask,
     abort,
+    flash,
     g,
     redirect,
     render_template_string,
@@ -19,7 +21,7 @@ from flask import (
     session,
     url_for,
 )
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -44,12 +46,6 @@ if not app.config["SECRET_KEY"]:
   raise RuntimeError("La variable d'environnement SECRET_KEY doit être définie.")
 if len(app.config["SECRET_KEY"]) < 32:
   raise RuntimeError("SECRET_KEY doit contenir au moins 32 caractères.")
-if not APP_PASSWORD_HASH:
-  raise RuntimeError(
-      "La variable APP_PASSWORD_HASH doit contenir le hash du mot de passe."
-  )
-if not APP_USERNAME.strip():
-  raise RuntimeError("APP_USERNAME ne peut pas être vide.")
 if not DATABASE_URL:
   raise RuntimeError("La variable d'environnement DATABASE_URL doit être définie.")
 
@@ -170,6 +166,17 @@ def protect_requests():
   if request.endpoint != "login" and not session.get("authenticated"):
     next_url = request.full_path if request.query_string else request.path
     return redirect(url_for("login", next=next_url))
+  if request.endpoint != "login" and session.get("authenticated"):
+    cur = get_db().cursor()
+    cur.execute(
+        "SELECT id, username, role FROM users WHERE id = %s AND active = TRUE",
+        (session.get("user_id"),),
+    )
+    g.current_user = cur.fetchone()
+    cur.close()
+    if g.current_user is None:
+      session.clear()
+      return redirect(url_for("login"))
   if request.method == "POST":
     submitted_token = request.form.get("csrf_token", "")
     if not submitted_token or not hmac.compare_digest(submitted_token, csrf_token()):
@@ -180,13 +187,19 @@ def protect_requests():
 def login():
   error = None
   if request.method == "POST":
-    username = request.form.get("username", "")
+    username = request.form.get("username", "").strip().lower()
     password = request.form.get("password", "")
-    if hmac.compare_digest(
-        username.encode("utf-8"), APP_USERNAME.encode("utf-8")
-    ) and check_password_hash(APP_PASSWORD_HASH, password):
+    cur = get_db().cursor()
+    cur.execute(
+        "SELECT id, username, password_hash FROM users WHERE username = %s AND active = TRUE",
+        (username,),
+    )
+    user = cur.fetchone()
+    cur.close()
+    if user and check_password_hash(user["password_hash"], password):
       session.clear()
       session["authenticated"] = True
+      session["user_id"] = user["id"]
       csrf_token()
       next_url = request.args.get("next", "")
       if next_url.startswith("/") and not next_url.startswith("//"):
@@ -200,6 +213,12 @@ def login():
 def logout():
   session.clear()
   return redirect(url_for("login"))
+
+
+def require_admin():
+  current_user = getattr(g, "current_user", None)
+  if not current_user or current_user["role"] != "admin":
+    abort(403)
 
 
 def get_db():
@@ -256,7 +275,36 @@ def init_db():
             reason TEXT,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
     """)
+  cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
+  try:
+    cursor.execute("SELECT COUNT(*) AS count FROM users")
+    if cursor.fetchone()["count"] == 0:
+      if not APP_PASSWORD_HASH:
+        raise RuntimeError(
+            "La base ne contient aucun utilisateur. Définissez APP_PASSWORD_HASH "
+            "pour initialiser le compte administrateur."
+        )
+      if not APP_USERNAME.strip():
+        raise RuntimeError("APP_USERNAME ne peut pas être vide.")
+      cursor.execute(
+          """
+              INSERT INTO users (username, password_hash, role)
+              VALUES (%s, %s, 'admin')
+              ON CONFLICT (username) DO NOTHING
+          """,
+          (APP_USERNAME.strip().lower(), APP_PASSWORD_HASH),
+      )
+  finally:
+    cursor.execute("SELECT pg_advisory_unlock(73401219078123::bigint)")
   cursor.execute("""
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS min_threshold INTEGER DEFAULT 2;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS supplier TEXT;
@@ -339,6 +387,7 @@ LAYOUT_HEADER = """
                 </div>
 
                 <nav class="flex space-x-1 sm:space-x-2">
+                    <span class="px-2 py-2 text-[10px] text-emerald-200">{{ g.current_user.username }}</span>
                     <a href="/entry" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>✏️</span> Saisie
                     </a>
@@ -761,6 +810,9 @@ SETTINGS_TEMPLATE = (
             <h1 class="text-base font-bold text-slate-900">Réglages & Configuration</h1>
             <p class="text-xs text-slate-500">Gérez et modifiez les emplacements physiques et les équipements associés</p>
         </div>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+        <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
+        {% endfor %}
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Emplacements -->
@@ -837,6 +889,49 @@ SETTINGS_TEMPLATE = (
                 </div>
             </div>
         </div>
+        {% if current_user.role == 'admin' %}
+        <section class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
+            <div>
+                <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Gestion des utilisateurs</h2>
+                <p class="text-xs text-slate-500 mt-1">Les nouveaux comptes n'ont pas accès à la gestion des utilisateurs.</p>
+            </div>
+            <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input name="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" autocomplete="off" placeholder="Identifiant" class="text-xs p-2 border border-slate-300 rounded">
+                <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Mot de passe (12 caractères min.)" class="text-xs p-2 border border-slate-300 rounded">
+                <select name="role" class="text-xs p-2 border border-slate-300 rounded bg-white">
+                    <option value="user">Utilisateur</option>
+                    <option value="admin">Administrateur</option>
+                </select>
+                <button type="submit" class="bg-forest hover:bg-forest-light text-white rounded text-xs font-semibold">Créer le compte</button>
+            </form>
+            <div class="divide-y divide-slate-100">
+                {% for account in users %}
+                <div class="py-3 flex flex-col gap-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span class="font-semibold text-slate-800">{{ account.username }}</span>
+                        <span class="text-slate-500">{{ 'Administrateur' if account.role == 'admin' else 'Utilisateur' }} · {{ 'Actif' if account.active else 'Désactivé' }}</span>
+                        {% if account.id != current_user.id %}
+                        <form action="{{ url_for('toggle_user', user_id=account.id) }}" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="text-xs font-medium {% if account.active %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ 'Désactiver' if account.active else 'Réactiver' }}</button>
+                        </form>
+                        {% else %}
+                        <span class="text-slate-400">Votre compte</span>
+                        {% endif %}
+                    </div>
+                    <form action="{{ url_for('reset_user_password', user_id=account.id) }}" method="POST" class="flex flex-wrap gap-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Nouveau mot de passe (12 caractères min.)" class="flex-grow text-xs p-2 border border-slate-300 rounded">
+                        <button type="submit" class="text-xs px-3 py-2 rounded bg-slate-100 hover:bg-slate-200">Réinitialiser le mot de passe</button>
+                    </form>
+                </div>
+                {% else %}
+                <p class="text-slate-400 text-xs italic py-3">Aucun utilisateur.</p>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
     </div>
 """
     + LAYOUT_FOOTER
@@ -1068,6 +1163,10 @@ def settings_view():
         ORDER BY e.name
     """)
   equipment = cur.fetchall()
+  cur.execute(
+      "SELECT id, username, role, active FROM users ORDER BY username"
+  )
+  users = cur.fetchall() if g.current_user["role"] == "admin" else []
   cur.close()
   total_val = calculate_total_stock_value()
   return render_template_string(
@@ -1075,8 +1174,94 @@ def settings_view():
       active_page="settings",
       locations=locations,
       equipment=equipment,
+      users=users,
+      current_user=g.current_user,
       total_stock_value=total_val,
   )
+
+
+@app.route("/users/add", methods=["POST"])
+def add_user():
+  require_admin()
+  username = request.form.get("username", "").strip().lower()
+  password = request.form.get("password", "")
+  role = request.form.get("role", "user")
+  if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,64}", username):
+    abort(400, description="Identifiant invalide (3 à 64 caractères : lettres, chiffres, point, tiret ou souligné).")
+  if len(password) < 12:
+    abort(400, description="Le mot de passe doit contenir au moins 12 caractères.")
+  if role not in {"user", "admin"}:
+    abort(400, description="Rôle utilisateur invalide.")
+
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          INSERT INTO users (username, password_hash, role)
+          VALUES (%s, %s, %s)
+          ON CONFLICT (username) DO NOTHING
+          RETURNING id
+      """,
+      (username, generate_password_hash(password), role),
+  )
+  if cur.fetchone() is None:
+    cur.close()
+    flash("Cet identifiant existe déjà.", "error")
+    return redirect(url_for("settings_view"))
+  get_db().commit()
+  cur.close()
+  flash(f"Le compte « {username} » a été créé.", "success")
+  return redirect(url_for("settings_view"))
+
+
+@app.route("/users/<int:user_id>/toggle", methods=["POST"])
+def toggle_user(user_id):
+  require_admin()
+  if user_id == g.current_user["id"]:
+    abort(400, description="Vous ne pouvez pas désactiver votre propre compte.")
+
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("SELECT pg_advisory_xact_lock(73401219078124::bigint)")
+  cur.execute(
+      "SELECT role, active FROM users WHERE id = %s FOR UPDATE",
+      (user_id,),
+  )
+  account = cur.fetchone()
+  if account is None:
+    cur.close()
+    abort(404)
+  if account["role"] == "admin" and account["active"]:
+    cur.execute("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = TRUE")
+    if cur.fetchone()["count"] <= 1:
+      db.rollback()
+      cur.close()
+      abort(400, description="Impossible de désactiver le dernier administrateur actif.")
+  cur.execute("UPDATE users SET active = NOT active WHERE id = %s", (user_id,))
+  db.commit()
+  cur.close()
+  flash("Le statut du compte a été modifié.", "success")
+  return redirect(url_for("settings_view"))
+
+
+@app.route("/users/<int:user_id>/password", methods=["POST"])
+def reset_user_password(user_id):
+  require_admin()
+  password = request.form.get("password", "")
+  if len(password) < 12:
+    abort(400, description="Le mot de passe doit contenir au moins 12 caractères.")
+  cur = get_db().cursor()
+  cur.execute(
+      "UPDATE users SET password_hash = %s WHERE id = %s RETURNING username",
+      (generate_password_hash(password), user_id),
+  )
+  account = cur.fetchone()
+  if account is None:
+    cur.close()
+    abort(404)
+  get_db().commit()
+  cur.close()
+  flash(f"Le mot de passe du compte « {account['username']} » a été réinitialisé.", "success")
+  return redirect(url_for("settings_view"))
 
 
 @app.route("/add_location", methods=["POST"])
