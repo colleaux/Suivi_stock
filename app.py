@@ -670,8 +670,9 @@ STOCK_TEMPLATE = (
         </div>
 
         <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
+            <label class="block text-xs font-semibold text-slate-700 mb-2">Recherche rapide d’article</label>
             <form method="GET" action="/stock" class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <input type="text" name="search" value="{{ search_query or '' }}" placeholder="Rechercher désignation..." class="text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
+                <input type="search" name="search" value="{{ search_query or '' }}" aria-label="Rechercher par mot-clé ou référence" placeholder="Nom, mot-clé ou référence…" class="md:col-span-2 text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                 <select name="loc_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="">Tous les emplacements</option>
                     {% for loc in locations %}
@@ -691,6 +692,12 @@ STOCK_TEMPLATE = (
                     {% endif %}
                 </div>
             </form>
+            {% if search_query %}
+            <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">
+                {{ matched_article_count }} résultat(s) pour « {{ search_query }} » —
+                <strong class="text-emerald-800">{{ in_stock_count }} article(s) disponible(s) en stock</strong>
+            </p>
+            {% endif %}
         </div>
 
         <!-- RESTRUCTURATION : INVENTAIRE GROUPÉ PAR LIEU DE STOCKAGE -->
@@ -715,6 +722,7 @@ STOCK_TEMPLATE = (
                     <table class="w-full text-left border-collapse text-xs print-table">
                         <thead>
                             <tr class="bg-emerald-50/60 text-slate-700 border-b border-slate-200 uppercase font-semibold text-[10px] tracking-wider">
+                                <th class="p-2.5 border-r border-slate-200 text-center">Photo</th>
                                 <th class="p-2.5 border-r border-slate-200">Statut</th>
                                 <th class="p-2.5 border-r border-slate-200">N° Article</th>
                                 <th class="p-2.5 border-r border-slate-200">Désignation</th>
@@ -730,8 +738,22 @@ STOCK_TEMPLATE = (
                         <tbody class="divide-y divide-slate-200">
                             {% for item in group['items'] %}
                             <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50/60{% endif %} transition">
+                                <td class="p-2 border-r border-slate-200">
+                                    {% if item.image_filename %}
+                                    <img
+                                        src="{{ url_for('static', filename='uploads/' ~ item.image_filename) }}"
+                                        alt="Photo de {{ item.name }}"
+                                        loading="lazy"
+                                        class="w-14 h-14 rounded object-cover bg-slate-100 mx-auto"
+                                    >
+                                    {% else %}
+                                    <span class="w-14 h-14 rounded bg-slate-100 text-slate-400 flex items-center justify-center mx-auto text-lg" aria-label="Aucune photo">📦</span>
+                                    {% endif %}
+                                </td>
                                 <td class="p-2.5 font-bold border-r border-slate-200">
-                                    {% if item.quantity < item.min_threshold %}
+                                    {% if item.quantity == 0 %}
+                                    <span class="px-2 py-0.5 rounded text-[9px] bg-slate-200 text-slate-800 font-bold uppercase">RUPTURE</span>
+                                    {% elif item.quantity < item.min_threshold %}
                                     <span class="px-2 py-0.5 rounded text-[9px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
                                     {% else %}
                                     <span class="px-2 py-0.5 rounded text-[9px] bg-emerald-100 text-emerald-900 font-semibold uppercase">OK</span>
@@ -1093,8 +1115,11 @@ def stock_view():
   params = []
 
   if search_query:
-    query += " AND (a.name ILIKE %s OR a.reference ILIKE %s)"
-    params.extend([f"%{search_query}%", f"%{search_query}%"])
+    search_terms = search_query.split()
+    for term in search_terms:
+      escaped_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+      query += " AND (a.name ILIKE %s OR COALESCE(a.reference, '') ILIKE %s)"
+      params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
   if loc_filter:
     query += " AND a.location_id = %s"
     params.append(loc_filter)
@@ -1108,6 +1133,8 @@ def stock_view():
   cur.close()
 
   total_stock_value = calculate_total_stock_value()
+  matched_article_count = len(articles)
+  in_stock_count = sum(1 for item in articles if item["quantity"] > 0)
 
   # Groupement dynamique strict par lieu de stockage sous forme de listes de dictionnaires
   grouped_dict = {}
@@ -1136,6 +1163,8 @@ def stock_view():
       equipment=equipment,
       grouped_articles=grouped_articles,
       search_query=search_query,
+      matched_article_count=matched_article_count,
+      in_stock_count=in_stock_count,
       current_loc=loc_filter,
       current_eq=eq_filter,
       total_stock_value=total_stock_value,
