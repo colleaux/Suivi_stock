@@ -671,30 +671,34 @@ STOCK_TEMPLATE = (
 
         <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm no-print">
             <label class="block text-xs font-semibold text-slate-700 mb-2">Recherche rapide d’article</label>
-            <form method="GET" action="/stock" class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <form method="GET" action="/stock" class="grid grid-cols-1 md:grid-cols-6 gap-3">
                 <input type="search" name="search" value="{{ search_query or '' }}" aria-label="Rechercher par mot-clé ou référence" placeholder="Nom, mot-clé ou référence…" class="md:col-span-2 text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                 <select name="loc_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="">Tous les emplacements</option>
                     {% for loc in locations %}
-                    <option value="{{ loc.id }}" {% if current_loc == loc.id|string %}selected{% endif %}>{{ loc.name }}</option>
+                    <option value="{{ loc.id }}" {% if current_loc == loc.id %}selected{% endif %}>{{ loc.name }}</option>
                     {% endfor %}
                 </select>
                 <select name="eq_filter" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="">Tous les équipements</option>
                     {% for eq in equipment %}
-                    <option value="{{ eq.id }}" {% if current_eq == eq.id|string %}selected{% endif %}>{{ eq.name }}</option>
+                    <option value="{{ eq.id }}" {% if current_eq == eq.id %}selected{% endif %}>{{ eq.name }}</option>
                     {% endfor %}
+                </select>
+                <select name="stock_status" aria-label="Filtrer par disponibilité" class="text-xs p-2 border border-slate-300 rounded bg-white">
+                    <option value="" {% if current_stock_status != 'out' %}selected{% endif %}>Tous les stocks</option>
+                    <option value="out" {% if current_stock_status == 'out' %}selected{% endif %}>En rupture (quantité zéro)</option>
                 </select>
                 <div class="flex gap-2">
                     <button type="submit" class="flex-1 bg-forest text-white text-xs font-semibold py-2 rounded hover:bg-forest-light transition">Filtrer</button>
-                    {% if search_query or current_loc or current_eq %}
+                    {% if search_query or current_loc or current_eq or current_stock_status %}
                     <a href="/stock" class="px-3 py-2 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center">Effacer</a>
                     {% endif %}
                 </div>
             </form>
-            {% if search_query %}
+            {% if search_query or current_stock_status %}
             <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">
-                {{ matched_article_count }} résultat(s) pour « {{ search_query }} » —
+                {{ matched_article_count }} article(s) correspondant(s){% if search_query %} à « {{ search_query }} »{% endif %}{% if current_stock_status == 'out' %} en rupture{% endif %} —
                 <strong class="text-emerald-800">{{ in_stock_count }} article(s) disponible(s) en stock</strong>
             </p>
             {% endif %}
@@ -807,6 +811,56 @@ STOCK_TEMPLATE = (
             </div>
         {% endif %}
     </div>
+    {% if show_rupture_popup %}
+    <div id="rupture-popup" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="rupture-popup-title">
+        <section class="w-full max-w-lg rounded-xl bg-white shadow-2xl">
+            <div class="flex items-start justify-between gap-4 border-b border-rose-100 bg-rose-50 p-5">
+                <div>
+                    <h2 id="rupture-popup-title" class="text-lg font-bold text-rose-900">⚠️ Articles en rupture</h2>
+                    <p class="mt-1 text-sm text-rose-800">{{ rupture_count }} article(s) avec un stock à zéro.</p>
+                </div>
+                <button type="button" id="close-rupture-popup" aria-label="Fermer l'alerte" class="min-h-11 rounded px-3 text-xl text-slate-600 hover:bg-white">×</button>
+            </div>
+            <div class="max-h-[55vh] overflow-y-auto p-5">
+                <ul class="divide-y divide-slate-100">
+                    {% for item in rupture_articles %}
+                    <li class="py-2 text-sm">
+                        <span class="font-semibold text-slate-900">{{ item.name }}</span>
+                        <span class="block text-xs text-slate-500">Réf. : {{ item.reference or 'Non renseignée' }} · {{ item.loc_name }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if rupture_count > rupture_articles|length %}
+                <p class="mt-3 text-xs text-slate-500">Et {{ rupture_count - rupture_articles|length }} autre(s) article(s).</p>
+                {% endif %}
+            </div>
+            <div class="flex flex-col-reverse gap-2 border-t border-slate-100 p-5 sm:flex-row sm:justify-end">
+                <button type="button" id="dismiss-rupture-popup" class="min-h-11 rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Fermer</button>
+                <a href="{{ url_for('stock_view', stock_status='out') }}" class="min-h-11 rounded bg-rose-800 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-rose-900">Afficher les articles en rupture</a>
+            </div>
+        </section>
+    </div>
+    <script>
+        (() => {
+            const popup = document.getElementById("rupture-popup");
+            const closeButtons = [
+                document.getElementById("close-rupture-popup"),
+                document.getElementById("dismiss-rupture-popup")
+            ];
+            const closePopup = () => {
+                popup.remove();
+            };
+            closeButtons.forEach((button) => button.addEventListener("click", closePopup));
+            popup.addEventListener("click", (event) => {
+                if (event.target === popup) closePopup();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && document.getElementById("rupture-popup")) closePopup();
+            });
+            closeButtons[0].focus();
+        })();
+    </script>
+    {% endif %}
 """
     + LAYOUT_FOOTER
 )
@@ -1138,6 +1192,9 @@ def stock_view():
   search_query = request.args.get("search", "").strip()
   loc_filter = optional_integer(request.args.get("loc_filter"), "loc_filter")
   eq_filter = optional_integer(request.args.get("eq_filter"), "eq_filter")
+  stock_status = request.args.get("stock_status", "")
+  if stock_status not in {"", "out"}:
+    abort(400, description="Filtre de disponibilité invalide.")
 
   query = """
         SELECT a.*, COALESCE(l.name, 'Non assigné') as loc_name, e.name as eq_name 
@@ -1160,11 +1217,34 @@ def stock_view():
   if eq_filter:
     query += " AND a.equipment_id = %s"
     params.append(eq_filter)
+  if stock_status == "out":
+    query += " AND a.quantity = 0"
 
   query += " ORDER BY loc_name ASC, a.name ASC"
   cur.execute(query, params)
   articles = cur.fetchall()
   cur.close()
+
+  show_rupture_popup = False
+  rupture_articles = []
+  rupture_count = 0
+  if not session.get("_rupture_popup_seen"):
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) AS count FROM articles WHERE quantity = 0")
+    rupture_count = cur.fetchone()["count"]
+    if rupture_count:
+      cur.execute("""
+          SELECT a.name, a.reference, COALESCE(l.name, 'Non assigné') AS loc_name
+          FROM articles a
+          LEFT JOIN locations l ON a.location_id = l.id
+          WHERE a.quantity = 0
+          ORDER BY a.name ASC
+          LIMIT 50
+      """)
+      rupture_articles = cur.fetchall()
+      show_rupture_popup = True
+    cur.close()
+    session["_rupture_popup_seen"] = True
 
   total_stock_value = calculate_total_stock_value()
   matched_article_count = len(articles)
@@ -1199,9 +1279,13 @@ def stock_view():
       search_query=search_query,
       matched_article_count=matched_article_count,
       in_stock_count=in_stock_count,
+      current_stock_status=stock_status,
       current_loc=loc_filter,
       current_eq=eq_filter,
       total_stock_value=total_stock_value,
+      show_rupture_popup=show_rupture_popup,
+      rupture_articles=rupture_articles,
+      rupture_count=rupture_count,
   )
 
 
