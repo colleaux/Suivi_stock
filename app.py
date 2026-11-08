@@ -969,9 +969,22 @@ SETTINGS_TEMPLATE = (
                     <button type="submit" class="w-full bg-forest hover:bg-forest-light text-white py-2 rounded text-xs font-semibold transition">Ajouter l'Équipement</button>
                 </form>
 
-                <div class="divide-y divide-slate-100 text-xs pt-2">
+                <div class="space-y-1">
+                    <label for="equipment-search" class="block text-xs font-semibold text-slate-700">Rechercher un équipement</label>
+                    <input
+                        id="equipment-search"
+                        type="search"
+                        placeholder="Nom de machine ou emplacement…"
+                        aria-label="Rechercher un équipement ou une machine"
+                        aria-controls="equipment-list"
+                        class="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700"
+                    >
+                    <p id="equipment-search-count" class="text-[11px] text-slate-500" aria-live="polite">{{ equipment|length }} équipement(s)</p>
+                </div>
+
+                <div id="equipment-list" class="divide-y divide-slate-100 text-xs pt-2">
                     {% for eq in equipment %}
-                    <div class="py-3 space-y-1">
+                    <div class="equipment-search-item py-3 space-y-1" data-search="{{ eq.name }} {{ eq.loc_name or '' }}">
                         <form action="/edit_equipment/{{ eq.id }}" method="POST" class="space-y-1.5">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="flex gap-2">
@@ -994,6 +1007,7 @@ SETTINGS_TEMPLATE = (
                     <p class="text-slate-400 text-xs italic">Aucun équipement configuré.</p>
                     {% endfor %}
                 </div>
+                <p id="equipment-search-empty" class="hidden text-slate-400 text-xs italic" role="status">Aucun équipement ne correspond à cette recherche.</p>
             </div>
         </div>
         {% if current_user.role == 'admin' %}
@@ -1040,6 +1054,26 @@ SETTINGS_TEMPLATE = (
         </section>
         {% endif %}
     </div>
+    <script>
+        const equipmentSearch = document.getElementById("equipment-search");
+        if (equipmentSearch) {
+            const equipmentItems = Array.from(document.querySelectorAll(".equipment-search-item"));
+            const emptyMessage = document.getElementById("equipment-search-empty");
+            const resultCount = document.getElementById("equipment-search-count");
+            const normalize = (value) => value.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLocaleLowerCase();
+            equipmentSearch.addEventListener("input", () => {
+                const query = normalize(equipmentSearch.value.trim());
+                let visibleCount = 0;
+                equipmentItems.forEach((item) => {
+                    const matches = normalize(item.dataset.search || "").includes(query);
+                    item.hidden = !matches;
+                    if (matches) visibleCount += 1;
+                });
+                emptyMessage.classList.toggle("hidden", visibleCount > 0 || query === "");
+                resultCount.textContent = `${visibleCount} équipement(s)`;
+            });
+        }
+    </script>
 """
     + LAYOUT_FOOTER
 )
