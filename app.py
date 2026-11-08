@@ -959,7 +959,7 @@ SETTINGS_TEMPLATE = (
             </div>
             <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input name="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" autocomplete="off" placeholder="Identifiant" class="text-xs p-2 border border-slate-300 rounded">
+                <input name="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="Identifiant ou e-mail" title="3 à 64 caractères ; lettres, chiffres, point, tiret, souligné, @ ou +" class="text-xs p-2 border border-slate-300 rounded">
                 <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Mot de passe (12 caractères min.)" class="text-xs p-2 border border-slate-300 rounded">
                 <select name="role" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="user">Utilisateur</option>
@@ -1248,8 +1248,14 @@ def add_user():
   username = request.form.get("username", "").strip().lower()
   password = request.form.get("password", "")
   role = request.form.get("role", "user")
-  if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,64}", username):
-    abort(400, description="Identifiant invalide (3 à 64 caractères : lettres, chiffres, point, tiret ou souligné).")
+  if not re.fullmatch(r"[\w.@+-]{3,64}", username):
+    abort(
+        400,
+        description=(
+            "Identifiant invalide : utilisez 3 à 64 caractères sans espace "
+            "(lettres, chiffres, point, tiret, souligné, @ ou +)."
+        ),
+    )
   if len(password) < 12:
     abort(400, description="Le mot de passe doit contenir au moins 12 caractères.")
   if role not in {"user", "admin"}:
