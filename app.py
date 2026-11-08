@@ -1,25 +1,205 @@
 import datetime
+import hmac
+import io
+import math
 import os
+import secrets
+import warnings
+
 import psycopg
+from PIL import Image, UnidentifiedImageError
 from psycopg.rows import dict_row
-from flask import Flask, g, redirect, render_template_string, request, url_for
+from flask import (
+    Flask,
+    abort,
+    g,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
+from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "static/uploads"
+UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
+APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
+
+if not app.config["SECRET_KEY"]:
+  raise RuntimeError("La variable d'environnement SECRET_KEY doit être définie.")
+if len(app.config["SECRET_KEY"]) < 32:
+  raise RuntimeError("SECRET_KEY doit contenir au moins 32 caractères.")
+if not APP_PASSWORD_HASH:
+  raise RuntimeError(
+      "La variable APP_PASSWORD_HASH doit contenir le hash du mot de passe."
+  )
+if not APP_USERNAME.strip():
+  raise RuntimeError("APP_USERNAME ne peut pas être vide.")
+if not DATABASE_URL:
+  raise RuntimeError("La variable d'environnement DATABASE_URL doit être définie.")
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connexion - Suivi Inventaire</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <main class="w-full max-w-sm bg-white rounded-lg shadow p-6">
+        <h1 class="text-lg font-bold text-slate-900 mb-5">Connexion au suivi de stock</h1>
+        {% if error %}<p role="alert" class="text-sm text-rose-700 mb-4">{{ error }}</p>{% endif %}
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="block text-sm font-medium text-slate-700">
+                Identifiant
+                <input name="username" autocomplete="username" required class="mt-1 w-full border rounded p-2">
+            </label>
+            <label class="block text-sm font-medium text-slate-700">
+                Mot de passe
+                <input type="password" name="password" autocomplete="current-password" required class="mt-1 w-full border rounded p-2">
+            </label>
+            <button type="submit" class="w-full bg-emerald-900 text-white rounded p-2 font-semibold">Se connecter</button>
+        </form>
+    </main>
+</body>
+</html>
+"""
 
 def allowed_file(filename):
-  return (
-      "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-  )
+  return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+def save_uploaded_image(upload):
+  if not upload or not upload.filename:
+    return None
+  if not allowed_file(upload.filename):
+    abort(400, description="Format d'image non autorisé.")
+  image_data = upload.read()
+  try:
+    with warnings.catch_warnings():
+      warnings.simplefilter("error", Image.DecompressionBombWarning)
+      image = Image.open(io.BytesIO(image_data))
+      image_format = image.format
+      image.verify()
+  except (
+      UnidentifiedImageError,
+      OSError,
+      Image.DecompressionBombError,
+      Image.DecompressionBombWarning,
+  ):
+    abort(400, description="Le fichier envoyé n'est pas une image valide.")
+  expected_formats = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP"}
+  extension = upload.filename.rsplit(".", 1)[1].lower()
+  if image_format != expected_formats[extension]:
+    abort(400, description="L'extension ne correspond pas au format de l'image.")
+  filename = f"art_{secrets.token_hex(8)}_{secure_filename(upload.filename)}"
+  with open(os.path.join(app.config["UPLOAD_FOLDER"], filename), "wb") as image_file:
+    image_file.write(image_data)
+  return filename
+
+
+def form_integer(field, default=None, minimum=None):
+  value = request.form.get(field)
+  if value in (None, ""):
+    if default is not None:
+      return default
+    abort(400, description=f"Le champ {field} est obligatoire.")
+  try:
+    result = int(value)
+  except (TypeError, ValueError):
+    abort(400, description=f"Le champ {field} doit être un nombre entier.")
+  if minimum is not None and result < minimum:
+    abort(400, description=f"Le champ {field} doit être supérieur ou égal à {minimum}.")
+  return result
+
+
+def optional_integer(value, field):
+  if value in (None, ""):
+    return None
+  try:
+    result = int(value)
+  except (TypeError, ValueError):
+    abort(400, description=f"Le champ {field} doit être un nombre entier.")
+  if result < 1:
+    abort(400, description=f"Le champ {field} doit être supérieur à zéro.")
+  return result
+
+
+def form_price(field="price"):
+  value = request.form.get(field, "0")
+  try:
+    result = float(value or 0)
+  except (TypeError, ValueError):
+    abort(400, description="Le prix doit être un nombre valide.")
+  if not math.isfinite(result) or result < 0:
+    abort(400, description="Le prix doit être positif ou nul.")
+  return result
+
+
+def csrf_token():
+  token = session.get("_csrf_token")
+  if token is None:
+    token = secrets.token_urlsafe(32)
+    session["_csrf_token"] = token
+  return token
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.before_request
+def protect_requests():
+  if request.endpoint != "login" and not session.get("authenticated"):
+    next_url = request.full_path if request.query_string else request.path
+    return redirect(url_for("login", next=next_url))
+  if request.method == "POST":
+    submitted_token = request.form.get("csrf_token", "")
+    if not submitted_token or not hmac.compare_digest(submitted_token, csrf_token()):
+      abort(400, description="Jeton CSRF invalide ou expiré.")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+  error = None
+  if request.method == "POST":
+    username = request.form.get("username", "")
+    password = request.form.get("password", "")
+    if hmac.compare_digest(
+        username.encode("utf-8"), APP_USERNAME.encode("utf-8")
+    ) and check_password_hash(APP_PASSWORD_HASH, password):
+      session.clear()
+      session["authenticated"] = True
+      csrf_token()
+      next_url = request.args.get("next", "")
+      if next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+      return redirect(url_for("home"))
+    error = "Identifiant ou mot de passe incorrect."
+  return render_template_string(LOGIN_TEMPLATE, error=error, csrf_token=csrf_token())
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+  session.clear()
+  return redirect(url_for("login"))
 
 
 def get_db():
@@ -29,7 +209,7 @@ def get_db():
 
 
 @app.teardown_appcontext
-def close_connection(exception):
+def close_connection(_exception):
   db = g.pop("db", None)
   if db is not None:
     db.close()
@@ -68,7 +248,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS movements (
             id SERIAL PRIMARY KEY,
-            article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
+            article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL,
             type TEXT NOT NULL,
             quantity INTEGER NOT NULL,
             supplier TEXT,
@@ -85,6 +265,32 @@ def init_db():
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
     """)
+  cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
+  try:
+    cursor.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'movements_article_id_fkey'
+                  AND conrelid = 'movements'::regclass
+                  AND confdeltype <> 'n'
+            ) THEN
+                ALTER TABLE movements DROP CONSTRAINT movements_article_id_fkey;
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'movements_article_id_fkey'
+                  AND conrelid = 'movements'::regclass
+            ) THEN
+                ALTER TABLE movements ADD CONSTRAINT movements_article_id_fkey
+                    FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE SET NULL;
+            END IF;
+        END;
+        $$;
+    """)
+  finally:
+    cursor.execute("SELECT pg_advisory_unlock(73401219078123::bigint)")
   cursor.close()
   conn.close()
 
@@ -142,6 +348,10 @@ LAYOUT_HEADER = """
                     <a href="/settings" class="px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>⚙️</span> Réglages
                     </a>
+                    <form action="{{ url_for('logout') }}" method="POST" class="inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="px-3 py-2 rounded-md text-xs font-semibold text-emerald-100 hover:bg-forest-light">Déconnexion</button>
+                    </form>
                 </nav>
             </div>
         </div>
@@ -184,6 +394,7 @@ ENTRY_TEMPLATE = (
                     </h2>
                     
                     <form action="/add" method="POST" enctype="multipart/form-data" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div class="sm:col-span-2">
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Nom de l'article *</label>
@@ -273,6 +484,7 @@ ENTRY_TEMPLATE = (
                     </h2>
 
                     <form action="/movement_exit" method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
                             <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
@@ -411,14 +623,17 @@ STOCK_TEMPLATE = (
                                     <div class="flex items-center justify-center gap-1.5">
                                         <a href="/edit/{{ item.id }}" class="text-emerald-800 hover:underline font-semibold text-xs">✏️ Modif</a>
                                         <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="action" value="minus">
                                             <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">-</button>
                                         </form>
                                         <form action="/update/{{ item.id }}" method="POST" class="inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="action" value="plus">
                                             <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
                                         </form>
                                         <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer cet article ?');" class="inline ml-1">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
                                         </form>
                                     </div>
@@ -452,6 +667,7 @@ EDIT_ARTICLE_TEMPLATE = (
             </div>
 
             <form action="/edit/{{ article.id }}" method="POST" enctype="multipart/form-data" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div class="sm:col-span-2">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">Désignation / Nom *</label>
@@ -553,6 +769,7 @@ SETTINGS_TEMPLATE = (
                     📍 Emplacements de Stockage
                 </h2>
                 <form action="/add_location" method="POST" class="flex gap-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="name" required placeholder="Nouveau lieu..." class="flex-grow text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     <button type="submit" class="bg-forest hover:bg-forest-light text-white px-3 py-2 rounded text-xs font-semibold transition">Ajouter</button>
                 </form>
@@ -561,10 +778,12 @@ SETTINGS_TEMPLATE = (
                     {% for loc in locations %}
                     <div class="py-2.5 flex justify-between items-center">
                         <form action="/edit_location/{{ loc.id }}" method="POST" class="flex items-center gap-2 flex-grow mr-2">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="text" name="name" value="{{ loc.name }}" required class="text-xs p-1 border border-transparent hover:border-slate-300 focus:border-emerald-700 rounded flex-grow font-semibold text-slate-700">
                             <button type="submit" class="text-emerald-800 hover:underline text-[11px] font-medium">Sauvegarder</button>
                         </form>
                         <form action="/delete_location/{{ loc.id }}" method="POST" onsubmit="return confirm('Supprimer ce lieu ?');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
                         </form>
                     </div>
@@ -580,6 +799,7 @@ SETTINGS_TEMPLATE = (
                     ⚙️ Équipements & Machines
                 </h2>
                 <form action="/add_equipment" method="POST" class="space-y-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
                     <select name="location_id" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
                         <option value="">-- Rattacher à un emplacement --</option>
@@ -594,6 +814,7 @@ SETTINGS_TEMPLATE = (
                     {% for eq in equipment %}
                     <div class="py-3 space-y-1">
                         <form action="/edit_equipment/{{ eq.id }}" method="POST" class="space-y-1.5">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="flex gap-2">
                                 <input type="text" name="name" value="{{ eq.name }}" required class="text-xs p-1 border border-slate-200 rounded flex-grow font-semibold text-slate-800 focus:border-emerald-700">
                                 <button type="submit" class="text-emerald-800 hover:underline text-[11px] font-medium">Sauvegarder</button>
@@ -608,7 +829,7 @@ SETTINGS_TEMPLATE = (
                                 <button type="submit" form="del_eq_{{ eq.id }}" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
                             </div>
                         </form>
-                        <form id="del_eq_{{ eq.id }}" action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');"></form>
+                        <form id="del_eq_{{ eq.id }}" action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
                     </div>
                     {% else %}
                     <p class="text-slate-400 text-xs italic">Aucun équipement configuré.</p>
@@ -679,8 +900,8 @@ def stock_view():
   equipment = cur.fetchall()
 
   search_query = request.args.get("search", "").strip()
-  loc_filter = request.args.get("loc_filter")
-  eq_filter = request.args.get("eq_filter")
+  loc_filter = optional_integer(request.args.get("loc_filter"), "loc_filter")
+  eq_filter = optional_integer(request.args.get("eq_filter"), "eq_filter")
 
   query = """
         SELECT a.*, COALESCE(l.name, 'Non assigné') as loc_name, e.name as eq_name 
@@ -706,7 +927,7 @@ def stock_view():
   articles = cur.fetchall()
   cur.close()
 
-  filtered_total_val = calculate_total_stock_value(articles)
+  total_stock_value = calculate_total_stock_value()
 
   # Groupement dynamique strict par lieu de stockage sous forme de listes de dictionnaires
   grouped_dict = {}
@@ -737,7 +958,7 @@ def stock_view():
       search_query=search_query,
       current_loc=loc_filter,
       current_eq=eq_filter,
-      total_stock_value=filtered_total_val,
+      total_stock_value=total_stock_value,
   )
 
 
@@ -747,66 +968,67 @@ def edit_article(id):
   cur = db.cursor()
 
   if request.method == "POST":
-    name = request.form["name"].strip()
+    name = request.form.get("name", "").strip()
+    if not name:
+      abort(400, description="Le nom de l'article est obligatoire.")
     reference = request.form.get("reference")
-    quantity = int(request.form.get("quantity", 0))
-    min_threshold = int(request.form.get("min_threshold", 2))
-    price = float(request.form.get("price") or 0.0)
+    quantity = form_integer("quantity", minimum=0)
+    min_threshold = form_integer("min_threshold", default=2, minimum=0)
+    price = form_price()
     is_estimated_price = 1 if "is_estimated_price" in request.form else 0
     supplier = request.form.get("supplier")
     invoice_number = request.form.get("invoice_number")
     entry_date = request.form.get("entry_date") or None
-    location_id = request.form.get("location_id") or None
-    equipment_id = request.form.get("equipment_id") or None
+    if entry_date:
+      try:
+        entry_date = datetime.date.fromisoformat(entry_date)
+      except ValueError:
+        abort(400, description="La date d'entrée est invalide.")
+    location_id = optional_integer(request.form.get("location_id"), "location_id")
+    equipment_id = optional_integer(request.form.get("equipment_id"), "equipment_id")
 
-    if "photo" in request.files and request.files["photo"].filename != "":
-      file = request.files["photo"]
-      if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filename = f"art_{os.urandom(4).hex()}_{filename}"
-        file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        cur.execute(
-            """
-                UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s, 
-                is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s, equipment_id=%s, image_filename=%s
-                WHERE id=%s
-            """,
-            (
-                name,
-                reference,
-                quantity,
-                min_threshold,
-                price,
-                is_estimated_price,
-                supplier,
-                invoice_number,
-                entry_date,
-                location_id,
-                equipment_id,
-                filename,
-                id,
-            ),
-        )
+    cur.execute("SELECT quantity FROM articles WHERE id = %s FOR UPDATE", (id,))
+    article = cur.fetchone()
+    if article is None:
+      abort(404)
+    old_quantity = article["quantity"]
+    filename = save_uploaded_image(request.files.get("photo"))
+    if filename:
+      cur.execute(
+          """
+              UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
+              is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
+              equipment_id=%s, image_filename=%s WHERE id=%s
+          """,
+          (
+              name, reference, quantity, min_threshold, price, is_estimated_price,
+              supplier, invoice_number, entry_date, location_id, equipment_id, filename, id,
+          ),
+      )
     else:
       cur.execute(
           """
-            UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s, 
-            is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s, equipment_id=%s
-            WHERE id=%s
-        """,
+              UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
+              is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
+              equipment_id=%s WHERE id=%s
+          """,
           (
-              name,
-              reference,
-              quantity,
-              min_threshold,
-              price,
-              is_estimated_price,
-              supplier,
-              invoice_number,
-              entry_date,
-              location_id,
-              equipment_id,
+              name, reference, quantity, min_threshold, price, is_estimated_price,
+              supplier, invoice_number, entry_date, location_id, equipment_id, id,
+          ),
+      )
+    quantity_delta = quantity - old_quantity
+    if quantity_delta:
+      cur.execute(
+          """
+              INSERT INTO movements (article_id, type, quantity, reason, date)
+              VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+          """,
+          (
               id,
+              "ENTREE" if quantity_delta > 0 else "SORTIE",
+              abs(quantity_delta),
+              "Correction de stock via modification de l'article",
           ),
       )
 
@@ -861,10 +1083,11 @@ def settings_view():
 def add_location():
   db = get_db()
   cur = db.cursor()
-  name = request.form["name"].strip()
-  if name:
-    cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
-    db.commit()
+  name = request.form.get("name", "").strip()
+  if not name:
+    abort(400, description="Le nom du lieu est obligatoire.")
+  cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
+  db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
 
@@ -873,10 +1096,11 @@ def add_location():
 def edit_location(id):
   db = get_db()
   cur = db.cursor()
-  name = request.form["name"].strip()
-  if name:
-    cur.execute("UPDATE locations SET name = %s WHERE id = %s", (name, id))
-    db.commit()
+  name = request.form.get("name", "").strip()
+  if not name:
+    abort(400, description="Le nom du lieu est obligatoire.")
+  cur.execute("UPDATE locations SET name = %s WHERE id = %s", (name, id))
+  db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
 
@@ -895,14 +1119,15 @@ def delete_location(id):
 def add_equipment():
   db = get_db()
   cur = db.cursor()
-  name = request.form["name"].strip()
-  location_id = request.form.get("location_id") or None
-  if name:
-    cur.execute(
-        "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
-        (name, location_id),
-    )
-    db.commit()
+  name = request.form.get("name", "").strip()
+  if not name:
+    abort(400, description="Le nom de l'équipement est obligatoire.")
+  location_id = optional_integer(request.form.get("location_id"), "location_id")
+  cur.execute(
+      "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
+      (name, location_id),
+  )
+  db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
 
@@ -911,14 +1136,15 @@ def add_equipment():
 def edit_equipment(id):
   db = get_db()
   cur = db.cursor()
-  name = request.form["name"].strip()
-  location_id = request.form.get("location_id") or None
-  if name:
-    cur.execute(
-        "UPDATE equipment SET name = %s, location_id = %s WHERE id = %s",
-        (name, location_id, id),
-    )
-    db.commit()
+  name = request.form.get("name", "").strip()
+  if not name:
+    abort(400, description="Le nom de l'équipement est obligatoire.")
+  location_id = optional_integer(request.form.get("location_id"), "location_id")
+  cur.execute(
+      "UPDATE equipment SET name = %s, location_id = %s WHERE id = %s",
+      (name, location_id, id),
+  )
+  db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
 
@@ -937,26 +1163,27 @@ def delete_equipment(id):
 def add_article():
   db = get_db()
   cur = db.cursor()
-  name = request.form["name"]
+  name = request.form.get("name", "").strip()
+  if not name:
+    abort(400, description="Le nom de l'article est obligatoire.")
   reference = request.form.get("reference")
-  quantity = int(request.form.get("quantity", 1))
-  min_threshold = int(request.form.get("min_threshold", 2))
-  price = float(request.form.get("price") or 0.0)
+  quantity = form_integer("quantity", default=1, minimum=0)
+  min_threshold = form_integer("min_threshold", default=2, minimum=0)
+  price = form_price()
   is_estimated_price = 1 if "is_estimated_price" in request.form else 0
   supplier = request.form.get("supplier")
   invoice_number = request.form.get("invoice_number")
   entry_date = request.form.get("entry_date") or datetime.date.today()
-  location_id = request.form.get("location_id") or None
-  equipment_id = request.form.get("equipment_id") or None
+  if isinstance(entry_date, str):
+    try:
+      entry_date = datetime.date.fromisoformat(entry_date)
+    except ValueError:
+      abort(400, description="La date d'entrée est invalide.")
+  location_id = optional_integer(request.form.get("location_id"), "location_id")
+  equipment_id = optional_integer(request.form.get("equipment_id"), "equipment_id")
   reason = f"Entrée - Fournisseur: {supplier or 'N/C'} | Facture: {invoice_number or 'N/C'}"
 
-  filename = None
-  if "photo" in request.files:
-    file = request.files["photo"]
-    if file and allowed_file(file.filename):
-      filename = secure_filename(file.filename)
-      filename = f"art_{os.urandom(4).hex()}_{filename}"
-      file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+  filename = save_uploaded_image(request.files.get("photo"))
 
   cur.execute(
       """
@@ -996,27 +1223,31 @@ def add_article():
 def movement_exit():
   db = get_db()
   cur = db.cursor()
-  article_id = request.form["article_id"]
-  qty = int(request.form["qty"])
-  reason = request.form["reason"]
+  article_id = form_integer("article_id", minimum=1)
+  qty = form_integer("qty", minimum=1)
+  reason = request.form.get("reason", "").strip()
+  if not reason:
+    abort(400, description="Le motif de sortie est obligatoire.")
 
-  cur.execute("SELECT quantity FROM articles WHERE id = %s", (article_id,))
-  item = cur.fetchone()
-  if item:
-    current_qty = item["quantity"]
-    new_qty = max(0, current_qty - qty)
-
-    cur.execute(
-        "UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, article_id)
-    )
-    cur.execute(
-        """
-            INSERT INTO movements (article_id, type, quantity, reason, date) 
-            VALUES (%s, 'SORTIE', %s, %s, CURRENT_TIMESTAMP)
-        """,
-        (article_id, qty, reason),
-    )
-    db.commit()
+  cur.execute(
+      """
+          UPDATE articles SET quantity = quantity - %s
+          WHERE id = %s AND quantity >= %s
+          RETURNING id
+      """,
+      (qty, article_id, qty),
+  )
+  if cur.fetchone() is None:
+    db.rollback()
+    abort(400, description="Article inexistant ou stock insuffisant.")
+  cur.execute(
+      """
+          INSERT INTO movements (article_id, type, quantity, reason, date)
+          VALUES (%s, 'SORTIE', %s, %s, CURRENT_TIMESTAMP)
+      """,
+      (article_id, qty, reason),
+  )
+  db.commit()
   cur.close()
 
   return redirect(url_for("stock_view"))
@@ -1026,16 +1257,26 @@ def movement_exit():
 def update_quantity(id):
   db = get_db()
   cur = db.cursor()
-  action = request.form["action"]
-  cur.execute("SELECT quantity FROM articles WHERE id = %s", (id,))
+  action = request.form.get("action")
+  if action not in {"plus", "minus"}:
+    abort(400, description="Action de mise à jour invalide.")
+  cur.execute("SELECT quantity FROM articles WHERE id = %s FOR UPDATE", (id,))
   item = cur.fetchone()
-  if item:
-    current_qty = item["quantity"]
-    new_qty = (
-        current_qty + 1 if action == "plus" else max(0, current_qty - 1)
-    )
-    cur.execute("UPDATE articles SET quantity = %s WHERE id = %s", (new_qty, id))
-    db.commit()
+  if item is None:
+    abort(404)
+  current_qty = item["quantity"]
+  if action == "minus" and current_qty == 0:
+    abort(400, description="Le stock est déjà à zéro.")
+  delta = 1 if action == "plus" else -1
+  cur.execute("UPDATE articles SET quantity = quantity + %s WHERE id = %s", (delta, id))
+  cur.execute(
+      """
+          INSERT INTO movements (article_id, type, quantity, reason, date)
+          VALUES (%s, %s, 1, %s, CURRENT_TIMESTAMP)
+      """,
+      (id, "ENTREE" if delta > 0 else "SORTIE", "Ajustement manuel du stock"),
+  )
+  db.commit()
   cur.close()
   return redirect(url_for("stock_view"))
 
@@ -1051,4 +1292,4 @@ def delete_article(id):
 
 
 if __name__ == "__main__":
-  app.run(host="0.0.0.0", port=10000, debug=True)
+  app.run(host="0.0.0.0", port=10000, debug=False)
