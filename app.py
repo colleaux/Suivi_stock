@@ -41,6 +41,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
+PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 
 if not app.config["SECRET_KEY"]:
   raise RuntimeError("La variable d'environnement SECRET_KEY doit être définie.")
@@ -150,6 +151,36 @@ def form_price(field="price"):
   return result
 
 
+def is_usable_password_hash(password_hash):
+  if not isinstance(password_hash, str):
+    return False
+  parts = password_hash.split("$", 2)
+  if len(parts) != 3 or not parts[1] or not re.fullmatch(r"[0-9a-f]+", parts[2]):
+    return False
+  method_parts = parts[0].split(":")
+  if method_parts[0] == "pbkdf2":
+    return (
+        len(method_parts) == 3
+        and method_parts[1] == "sha256"
+        and method_parts[2].isdigit()
+    )
+  if method_parts[0] == "scrypt":
+    return len(method_parts) == 4 and all(part.isdigit() for part in method_parts[1:])
+  return False
+
+
+def verify_password(password_hash, password):
+  try:
+    return check_password_hash(password_hash, password)
+  except (TypeError, ValueError) as error:
+    app.logger.warning("Rejected malformed stored password hash: %s", error)
+    return False
+
+
+def hash_password(password):
+  return generate_password_hash(password, method=PASSWORD_HASH_METHOD)
+
+
 def csrf_token():
   token = session.get("_csrf_token")
   if token is None:
@@ -196,7 +227,15 @@ def login():
     )
     user = cur.fetchone()
     cur.close()
-    if user and check_password_hash(user["password_hash"], password):
+    if user and verify_password(user["password_hash"], password):
+      if not user["password_hash"].startswith(PASSWORD_HASH_METHOD + "$"):
+        cur = get_db().cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (hash_password(password), user["id"]),
+        )
+        get_db().commit()
+        cur.close()
       session.clear()
       session["authenticated"] = True
       session["user_id"] = user["id"]
@@ -293,6 +332,11 @@ def init_db():
             "La base ne contient aucun utilisateur. Définissez APP_PASSWORD_HASH "
             "pour initialiser le compte administrateur."
         )
+      if not is_usable_password_hash(APP_PASSWORD_HASH):
+        raise RuntimeError(
+            "APP_PASSWORD_HASH est invalide. Générez-le avec Werkzeug en utilisant "
+            "la méthode pbkdf2:sha256."
+        )
       if not APP_USERNAME.strip():
         raise RuntimeError("APP_USERNAME ne peut pas être vide.")
       cursor.execute(
@@ -303,6 +347,24 @@ def init_db():
           """,
           (APP_USERNAME.strip().lower(), APP_PASSWORD_HASH),
       )
+    elif APP_PASSWORD_HASH and APP_USERNAME.strip():
+      cursor.execute(
+          "SELECT id, password_hash FROM users WHERE username = %s AND role = 'admin'",
+          (APP_USERNAME.strip().lower(),),
+      )
+      admin_user = cursor.fetchone()
+      if (
+          admin_user
+          and not is_usable_password_hash(admin_user["password_hash"])
+          and is_usable_password_hash(APP_PASSWORD_HASH)
+      ):
+        cursor.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (APP_PASSWORD_HASH, admin_user["id"]),
+        )
+        app.logger.warning(
+            "Replaced malformed password hash for the configured administrator."
+        )
   finally:
     cursor.execute("SELECT pg_advisory_unlock(73401219078123::bigint)")
   cursor.execute("""
@@ -1201,7 +1263,7 @@ def add_user():
           ON CONFLICT (username) DO NOTHING
           RETURNING id
       """,
-      (username, generate_password_hash(password), role),
+      (username, hash_password(password), role),
   )
   if cur.fetchone() is None:
     cur.close()
@@ -1252,7 +1314,7 @@ def reset_user_password(user_id):
   cur = get_db().cursor()
   cur.execute(
       "UPDATE users SET password_hash = %s WHERE id = %s RETURNING username",
-      (generate_password_hash(password), user_id),
+      (hash_password(password), user_id),
   )
   account = cur.fetchone()
   if account is None:
