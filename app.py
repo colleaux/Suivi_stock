@@ -457,6 +457,46 @@ LAYOUT_HEADER = """
             .print-table { border: 1px solid #CBD5E1 !important; }
             .print-table { min-width: 0 !important; }
             .page-break { page-break-before: always; }
+            .qr-print-page { display: block !important; min-height: 0 !important; }
+            .qr-print-page > header, .qr-print-page > footer { display: none !important; }
+            .qr-print-page > main {
+                width: 85mm !important;
+                height: 55mm !important;
+                max-width: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .qr-print-page > main > div { height: 100%; margin: 0 !important; }
+            .qr-print-page > main > div > :not(.article-qr-card) { display: none !important; }
+            .article-qr-card {
+                box-sizing: border-box !important;
+                display: flex !important;
+                flex-direction: row !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 4mm !important;
+                width: 85mm !important;
+                height: 55mm !important;
+                padding: 4mm !important;
+                border: 0.3mm solid #CBD5E1 !important;
+                border-radius: 2mm !important;
+                box-shadow: none !important;
+                text-align: left !important;
+                overflow: hidden !important;
+            }
+            .article-qr-code {
+                flex: none !important;
+                width: 36mm !important;
+                height: 36mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+            }
+            .article-qr-code img { width: 36mm !important; height: 36mm !important; }
+            .article-qr-details { min-width: 0; overflow-wrap: anywhere; }
+            .article-qr-details h2 { font-size: 12pt !important; line-height: 1.15 !important; }
+            .article-qr-details .article-reference { font-size: 9pt !important; }
+            .article-qr-details .qr-scan-hint { margin-top: 2mm !important; font-size: 7pt !important; }
         }
         .bg-forest { background-color: #0b3d2c; }
         .bg-forest-light { background-color: #124e38; }
@@ -478,7 +518,7 @@ LAYOUT_HEADER = """
         }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+<body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col {{ 'qr-print-page' if print_qr_page|default(false) else '' }}">
 
     <!-- Header / Navbar Principal -->
     <header class="bg-forest text-white shadow-md border-b border-emerald-900 no-print">
@@ -1323,14 +1363,18 @@ EDIT_ARTICLE_TEMPLATE = (
                 </div>
             </form>
         </div>
-        <section class="rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
-            <h2 class="text-lg font-bold text-slate-900">QR code de l’article</h2>
-            <p class="mt-1 text-sm text-slate-600">Scannez ce code avec l’appareil photo du téléphone : il ouvre le choix Entrée ou Sortie pour cet article. Si vous n’êtes pas connecté, l’application demandera vos identifiants puis reprendra cette opération.</p>
-            <div class="mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
+        <style>
+            @page { size: 85mm 55mm; margin: 0; }
+        </style>
+        <section class="article-qr-card rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
+            <div class="article-qr-code mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
                 <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
             </div>
-            <p class="mt-3 font-semibold text-slate-900">{{ article.name }}</p>
-            <p class="text-sm text-slate-600">Référence : {{ article.reference or 'Non renseignée' }}</p>
+            <div class="article-qr-details">
+                <h2 class="text-lg font-bold text-slate-900">{{ article.name }}</h2>
+                <p class="article-reference text-sm text-slate-600">Réf. : {{ article.reference or '—' }}</p>
+                <p class="qr-scan-hint mt-1 text-xs text-slate-500">Scanner pour entrée ou sortie</p>
+            </div>
             <div class="mt-4 flex flex-col justify-center gap-2 sm:flex-row no-print">
                 <button type="button" onclick="window.print()" class="min-h-11 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-900">Imprimer le QR code</button>
                 <a href="{{ qr_code_data }}" download="qr-article-{{ article.id }}.png" class="flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Télécharger l’image</a>
@@ -1843,6 +1887,7 @@ def edit_article(id):
   return render_template_string(
       EDIT_ARTICLE_TEMPLATE,
       active_page="stock",
+      print_qr_page=True,
       article=article,
       locations=locations,
       equipment=equipment,
