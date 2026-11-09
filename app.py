@@ -663,7 +663,9 @@ ENTRY_TEMPLATE = (
                             <p class="text-sm font-bold text-amber-950">Scanner le QR code de l’article</p>
                             <p class="mt-1 text-xs text-amber-900">Autorisez l’accès à la caméra, puis placez le QR code dans le cadre. Vous pouvez aussi choisir l’article dans la liste ci-dessous.</p>
                             <button type="button" id="start-qr-scanner" class="mt-3 min-h-11 rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">📷 Scanner un QR code</button>
-                            <div id="qr-reader" class="mt-3 hidden max-w-md overflow-hidden rounded-lg"></div>
+                            <div id="qr-reader" class="mt-3 hidden max-w-md overflow-hidden rounded-lg bg-black">
+                                <video id="qr-video" class="aspect-video w-full object-cover" autoplay muted playsinline></video>
+                            </div>
                             <p id="qr-scan-status" class="mt-2 text-sm text-slate-700" role="status" aria-live="polite"></p>
                         </div>
                         <div>
@@ -698,7 +700,7 @@ ENTRY_TEMPLATE = (
             </div>
         </section>
     </div>
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         (() => {
             const input = document.getElementById("article-photo");
@@ -727,96 +729,112 @@ ENTRY_TEMPLATE = (
         (() => {
             const startButton = document.getElementById("start-qr-scanner");
             const reader = document.getElementById("qr-reader");
+            const video = document.getElementById("qr-video");
             const status = document.getElementById("qr-scan-status");
             const articleSelect = document.getElementById("exit-article-id");
-            let scanner = null;
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d", { willReadFrequently: true });
+            let mediaStream = null;
+            let animationFrame = null;
             let scanning = false;
-            let scanComplete = false;
+            let lastInvalidText = "";
 
-            const stopScanner = async () => {
-                if (scanning) {
-                    await scanner.stop();
-                    scanning = false;
+            const stopScanner = () => {
+                scanning = false;
+                if (animationFrame !== null) {
+                    window.cancelAnimationFrame(animationFrame);
+                    animationFrame = null;
                 }
-                await scanner.clear();
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach((track) => track.stop());
+                    mediaStream = null;
+                }
+                video.pause();
+                video.srcObject = null;
+                reader.classList.add("hidden");
+            };
+
+            const scanFrame = () => {
+                if (!scanning) return;
+                if (video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                    const result = window.jsQR(
+                        imageData.data,
+                        imageData.width,
+                        imageData.height,
+                        { inversionAttempts: "dontInvert" }
+                    );
+                    if (result) {
+                        const match = result.data.match(/^STOCK:(\\d+)$/i);
+                        if (!match) {
+                            if (lastInvalidText !== result.data) {
+                                status.textContent = "Ce QR code ne correspond pas à un article de cette application.";
+                                lastInvalidText = result.data;
+                            }
+                        } else {
+                            const option = Array.from(articleSelect.options).find(
+                                (item) => item.value === match[1]
+                            );
+                            if (!option) {
+                                status.textContent = "Article introuvable. Actualisez la page puis réessayez.";
+                            } else {
+                                articleSelect.value = match[1];
+                                status.textContent = "Article sélectionné : " + option.text;
+                                stopScanner();
+                                startButton.textContent = "📷 Scanner un autre article";
+                                document.getElementById("exit-quantity").focus();
+                                document.getElementById("stock-exit").scrollIntoView({ behavior: "smooth" });
+                                return;
+                            }
+                        }
+                    }
+                }
+                animationFrame = window.requestAnimationFrame(scanFrame);
             };
 
             startButton.addEventListener("click", async () => {
-                if (!window.Html5Qrcode) {
-                    status.textContent = "Le module de scan n’a pas pu être chargé. Vérifiez votre connexion Internet ou choisissez l’article dans la liste.";
+                if (scanning) {
+                    stopScanner();
+                    startButton.textContent = "📷 Reprendre le scan";
+                    status.textContent = "Scanner arrêté.";
+                    return;
+                }
+                if (!window.jsQR) {
+                    status.textContent = "Le module de lecture QR n’a pas pu être chargé. Vérifiez votre connexion Internet ou choisissez l’article dans la liste.";
                     return;
                 }
                 if (!window.isSecureContext) {
                     status.textContent = "La caméra nécessite une connexion HTTPS. Ouvrez l’application avec son adresse sécurisée.";
                     return;
                 }
-                if (scanning) {
-                    try {
-                        await stopScanner();
-                        scanner = null;
-                        reader.classList.add("hidden");
-                        startButton.textContent = "📷 Reprendre le scan";
-                    } catch (error) {
-                        status.textContent = "Impossible d’arrêter le scanner : " + String(error);
-                    }
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    status.textContent = "Ce navigateur ne permet pas l’accès à la caméra. Choisissez l’article dans la liste.";
                     return;
                 }
 
                 reader.classList.remove("hidden");
                 status.textContent = "Initialisation de la caméra…";
-                scanner = new Html5Qrcode("qr-reader");
-                scanComplete = false;
                 try {
-                    const startPromise = scanner.start(
-                        { facingMode: "environment" },
-                        { fps: 10, qrbox: { width: 240, height: 240 } },
-                        async (decodedText) => {
-                            const match = decodedText.match(/^STOCK:(\\d+)$/i);
-                            if (!match) {
-                                status.textContent = "Ce QR code ne correspond pas à un article de cette application.";
-                                return;
-                            }
-                            const option = Array.from(articleSelect.options).find(
-                                (item) => item.value === match[1]
-                            );
-                            if (!option) {
-                                status.textContent = "Article introuvable. Actualisez la page puis réessayez.";
-                                return;
-                            }
-                            if (scanComplete) return;
-                            scanComplete = true;
-                            articleSelect.value = match[1];
-                            status.textContent = "Article sélectionné : " + option.text;
-                            try {
-                                await stopScanner();
-                            } catch (error) {
-                                status.textContent += " (La caméra n’a pas pu s’arrêter automatiquement : " + String(error) + ")";
-                            }
-                            reader.classList.add("hidden");
-                            startButton.textContent = "📷 Scanner un autre article";
-                            document.getElementById("exit-quantity").focus();
-                            document.getElementById("stock-exit").scrollIntoView({ behavior: "smooth" });
-                        },
-                        () => {}
-                    );
+                    mediaStream = await navigator.mediaDevices.getUserMedia({
+                        audio: false,
+                        video: { facingMode: { ideal: "environment" } }
+                    });
+                    video.srcObject = mediaStream;
+                    await video.play();
                     scanning = true;
-                    await startPromise;
-                    if (scanComplete) return;
+                    lastInvalidText = "";
                     startButton.textContent = "Arrêter le scan";
                     status.textContent = "Pointez la caméra vers le QR code de l’article.";
+                    animationFrame = window.requestAnimationFrame(scanFrame);
                 } catch (error) {
-                    scanning = false;
-                    reader.classList.add("hidden");
-                    try {
-                        await scanner.clear();
-                        scanner = null;
-                    } catch (clearError) {
-                        status.textContent = "Impossible d’arrêter le scanner : " + String(clearError);
-                        return;
-                    }
-                    status.textContent = "Accès à la caméra impossible. Vérifiez les autorisations du navigateur ou choisissez l’article dans la liste. Détail : " + String(error);
+                    stopScanner();
+                    status.textContent = "Accès à la caméra impossible. Vérifiez les autorisations de Safari ou choisissez l’article dans la liste. Détail : " + String(error);
                 }
             });
+            window.addEventListener("pagehide", stopScanner);
         })();
     </script>
 """
