@@ -20,6 +20,7 @@ from flask import (
     redirect,
     render_template_string,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -27,7 +28,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
+UPLOAD_FOLDER = os.environ.get(
+    "UPLOAD_FOLDER", os.path.join(app.root_path, "static", "uploads")
+)
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -94,6 +97,11 @@ LOGIN_TEMPLATE = """
 
 def allowed_file(filename):
   return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route("/uploads/<path:filename>")
+def uploaded_file(filename):
+  return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
 
 def save_uploaded_image(upload):
@@ -614,14 +622,24 @@ ENTRY_TEMPLATE = (
             <form action="{{ url_for('movement_entry') }}" method="POST" class="space-y-4 p-4 sm:p-6">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="article_id" value="{{ selected_article.id }}">
-                <label class="block text-sm font-semibold text-slate-700">
-                    Quantité à ajouter
-                    <input type="number" name="qty" value="1" min="1" required class="mt-1 w-full rounded border border-slate-300 p-2.5">
-                </label>
-                <label class="block text-sm font-semibold text-slate-700">
-                    Motif / fournisseur
-                    <input type="text" name="reason" placeholder="Réapprovisionnement, livraison..." class="mt-1 w-full rounded border border-slate-300 p-2.5">
-                </label>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <label class="block text-sm font-semibold text-slate-700">
+                        Quantité à ajouter *
+                        <input type="number" name="qty" value="1" min="1" step="1" required class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                    </label>
+                    <label class="block text-sm font-semibold text-slate-700">
+                        Tarif unitaire (€) *
+                        <input type="number" name="price" value="{{ '%.2f'|format(selected_article.price or 0) }}" min="0" step="0.01" required class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                    </label>
+                    <label class="block text-sm font-semibold text-slate-700">
+                        Fournisseur
+                        <input type="text" name="supplier" value="{{ selected_article.supplier or '' }}" placeholder="Nom du fournisseur" class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                    </label>
+                    <label class="block text-sm font-semibold text-slate-700">
+                        N° de facture (facultatif)
+                        <input type="text" name="invoice_number" placeholder="Ex. FAC-2026-99" class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                    </label>
+                </div>
                 <button type="submit" class="min-h-12 w-full rounded-lg bg-emerald-800 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-900">Enregistrer l’Entrée de Stock</button>
             </form>
         </section>
@@ -1068,7 +1086,7 @@ STOCK_TEMPLATE = (
                                 <td class="p-2 border-r border-slate-200">
                                     {% if item.image_filename %}
                                     <img
-                                        src="{{ url_for('static', filename='uploads/' ~ item.image_filename) }}"
+                                        src="{{ url_for('uploaded_file', filename=item.image_filename) }}"
                                         alt="Photo de {{ item.name }}"
                                         loading="lazy"
                                         class="w-14 h-14 rounded object-cover bg-slate-100 mx-auto"
@@ -2167,15 +2185,23 @@ def movement_entry():
   cur = db.cursor()
   article_id = form_integer("article_id", minimum=1)
   qty = form_integer("qty", minimum=1)
-  reason = request.form.get("reason", "").strip() or "Réapprovisionnement"
+  price = form_price()
+  supplier = request.form.get("supplier", "").strip() or None
+  invoice_number = request.form.get("invoice_number", "").strip() or None
+  reason = "Réapprovisionnement"
 
   cur.execute(
       """
-          UPDATE articles SET quantity = quantity + %s
+          UPDATE articles
+          SET quantity = quantity + %s,
+              price = %s,
+              is_estimated_price = 0,
+              supplier = COALESCE(%s, supplier),
+              invoice_number = %s
           WHERE id = %s
-          RETURNING price
+          RETURNING id
       """,
-      (qty, article_id),
+      (qty, price, supplier, invoice_number, article_id),
   )
   article = cur.fetchone()
   if article is None:
@@ -2184,10 +2210,11 @@ def movement_entry():
     abort(404, description="Article introuvable.")
   cur.execute(
       """
-          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
-          VALUES (%s, 'ENTREE', %s, %s, %s, CURRENT_TIMESTAMP)
+          INSERT INTO movements
+              (article_id, type, quantity, unit_price, supplier, invoice_number, reason, date)
+          VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
-      (article_id, qty, article["price"] or 0.0, reason),
+      (article_id, qty, price, supplier, invoice_number, reason),
   )
   db.commit()
   cur.close()
