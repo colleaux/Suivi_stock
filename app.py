@@ -337,6 +337,7 @@ def init_db():
             article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL,
             type TEXT NOT NULL,
             quantity INTEGER NOT NULL,
+            unit_price REAL,
             supplier TEXT,
             invoice_number TEXT,
             reason TEXT,
@@ -402,6 +403,7 @@ def init_db():
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS entry_date DATE;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
+        ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price REAL;
     """)
   cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
   try:
@@ -500,6 +502,9 @@ LAYOUT_HEADER = """
                     <a href="/stock" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>📊</span> Suivi & Rapport
                     </a>
+                    <a href="/movements" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'movements' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                        <span>🧾</span> Mouvements
+                    </a>
                     <a href="/settings" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>⚙️</span> Réglages
                     </a>
@@ -534,7 +539,7 @@ ENTRY_TEMPLATE = (
             <h1 class="mt-1 text-2xl sm:text-3xl font-extrabold">Entrée et sortie de stock</h1>
             <p class="mt-2 max-w-2xl text-sm text-emerald-100">Choisissez l’opération à effectuer. Chaque mouvement est enregistré dans l’historique de l’inventaire.</p>
             <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <a href="#stock-entry" class="flex min-h-14 items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-left font-bold text-emerald-950 shadow transition hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-300">
+                <a href="{% if preselected_article_found %}#existing-entry{% else %}#stock-entry{% endif %}" class="flex min-h-14 items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-left font-bold text-emerald-950 shadow transition hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-300">
                     <span class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-xl" aria-hidden="true">＋</span>Entrée de Stock</span>
                     <span aria-hidden="true">↓</span>
                 </a>
@@ -545,6 +550,44 @@ ENTRY_TEMPLATE = (
             </div>
         </div>
 
+        {% if preselected_article_found %}
+        <section id="operation-choice" class="scroll-mt-4 rounded-xl border border-sky-200 bg-white p-4 shadow-sm sm:p-6">
+            <p class="text-xs font-bold uppercase tracking-wide text-sky-800">Article scanné</p>
+            <h2 class="mt-1 text-lg font-extrabold text-slate-900">{{ selected_article.name }}</h2>
+            <p class="text-sm text-slate-600">Référence : {{ selected_article.reference or 'Non renseignée' }} · Stock disponible : {{ selected_article.quantity }}</p>
+            <p class="mt-4 text-sm font-semibold text-slate-800">Quelle opération souhaitez-vous effectuer ?</p>
+            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <a href="#existing-entry" class="flex min-h-14 items-center justify-center gap-2 rounded-lg bg-emerald-800 px-4 py-3 text-center font-bold text-white hover:bg-emerald-900">
+                    <span aria-hidden="true">＋</span> Entrée de stock
+                </a>
+                <a href="#stock-exit" class="flex min-h-14 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-center font-bold text-white hover:bg-amber-700">
+                    <span aria-hidden="true">−</span> Sortie de stock
+                </a>
+            </div>
+        </section>
+
+        <section id="existing-entry" class="scroll-mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
+            <div class="border-b border-emerald-100 bg-emerald-50 p-4 sm:p-6">
+                <h2 class="text-lg font-extrabold text-emerald-950">Entrée de Stock</h2>
+                <p class="mt-1 text-sm text-emerald-900">Ajouter une quantité à l’article scanné.</p>
+            </div>
+            <form action="{{ url_for('movement_entry') }}" method="POST" class="space-y-4 p-4 sm:p-6">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="article_id" value="{{ selected_article.id }}">
+                <label class="block text-sm font-semibold text-slate-700">
+                    Quantité à ajouter
+                    <input type="number" name="qty" value="1" min="1" required class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                </label>
+                <label class="block text-sm font-semibold text-slate-700">
+                    Motif / fournisseur
+                    <input type="text" name="reason" placeholder="Réapprovisionnement, livraison..." class="mt-1 w-full rounded border border-slate-300 p-2.5">
+                </label>
+                <button type="submit" class="min-h-12 w-full rounded-lg bg-emerald-800 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-900">Enregistrer l’Entrée de Stock</button>
+            </form>
+        </section>
+        {% endif %}
+
+        {% if not preselected_article_found %}
         <section id="stock-entry" class="scroll-mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
             <div class="flex items-start gap-4 border-b border-emerald-100 bg-emerald-50 p-4 sm:p-6">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-2xl font-bold text-white" aria-hidden="true">＋</span>
@@ -648,6 +691,7 @@ ENTRY_TEMPLATE = (
                 </div>
             </div>
         </section>
+        {% endif %}
 
         <section id="stock-exit" class="scroll-mt-4 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
             <div class="flex items-start gap-4 border-b border-amber-100 bg-amber-50 p-4 sm:p-6">
@@ -710,6 +754,7 @@ ENTRY_TEMPLATE = (
             const preview = document.getElementById("article-photo-preview");
             const image = document.getElementById("article-photo-image");
             const filename = document.getElementById("article-photo-name");
+            if (!input) return;
             let previewUrl = null;
             input.addEventListener("change", () => {
                 if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -735,9 +780,22 @@ ENTRY_TEMPLATE = (
                 behavior: "smooth",
                 block: "start"
             });
-            if ({{ 'true' if preselected_article_found else 'false' }}) {
-                document.getElementById("exit-quantity").focus({ preventScroll: true });
-            }
+            document.getElementById("exit-quantity").focus({ preventScroll: true });
+        });
+        {% elif start_entry_mode %}
+        window.addEventListener("load", () => {
+            document.getElementById("existing-entry").scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+            });
+            document.querySelector('#existing-entry input[name="qty"]').focus({ preventScroll: true });
+        });
+        {% elif start_choice_mode %}
+        window.addEventListener("load", () => {
+            document.getElementById("operation-choice").scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+            });
         });
         {% endif %}
 
@@ -794,7 +852,9 @@ ENTRY_TEMPLATE = (
                                 if (
                                     scannedUrl.origin === window.location.origin
                                     && scannedUrl.pathname === "/entry"
-                                    && scannedUrl.searchParams.get("mode") === "exit"
+                                    && ["choose", "entry", "exit"].includes(
+                                        scannedUrl.searchParams.get("mode")
+                                    )
                                     && /^\\d+$/.test(scannedId)
                                 ) {
                                     articleId = scannedId;
@@ -1088,13 +1148,93 @@ STOCK_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
+# --- MOVEMENT REPORT TEMPLATE ---
+MOVEMENTS_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <div class="mx-auto max-w-6xl space-y-6">
+        <section class="rounded-xl bg-forest p-5 text-white shadow-sm sm:p-6">
+            <p class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Historique des opérations</p>
+            <h1 class="mt-1 text-2xl font-extrabold">Suivi des mouvements de stock</h1>
+            <p class="mt-2 text-sm text-emerald-100">Filtrez les entrées et sorties par période et par article. Les montants utilisent le prix unitaire enregistré au moment du mouvement.</p>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 no-print">
+            <form method="GET" action="{{ url_for('movement_report') }}" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
+                <label class="text-sm font-semibold text-slate-700">Du
+                    <input type="date" name="date_from" value="{{ date_from }}" required class="mt-1 w-full rounded border border-slate-300 p-2">
+                </label>
+                <label class="text-sm font-semibold text-slate-700">Au
+                    <input type="date" name="date_to" value="{{ date_to }}" required class="mt-1 w-full rounded border border-slate-300 p-2">
+                </label>
+                <label class="text-sm font-semibold text-slate-700">Article
+                    <select name="article_id" class="mt-1 w-full rounded border border-slate-300 bg-white p-2">
+                        <option value="">Tous les articles</option>
+                        {% for item in articles %}
+                        <option value="{{ item.id }}" {% if current_article_id == item.id %}selected{% endif %}>{{ item.name }}{% if item.reference %} — {{ item.reference }}{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <div class="flex gap-2 lg:col-span-2">
+                    <button type="submit" class="min-h-11 flex-1 rounded bg-forest px-4 py-2 text-sm font-bold text-white hover:bg-forest-light">Afficher</button>
+                    <a href="{{ url_for('movement_report') }}" class="flex min-h-11 items-center rounded bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200">Réinitialiser</a>
+                </div>
+            </form>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div>
+                    <h2 class="font-bold text-slate-900">Résultats</h2>
+                    <p class="text-sm text-slate-600">{{ movements|length }} mouvement(s) du {{ date_from }} au {{ date_to }}</p>
+                </div>
+                <div class="text-sm font-bold text-slate-800">Valeur totale des mouvements : {{ "%.2f"|format(total_movement_value) }} €</div>
+            </div>
+            {% if movements %}
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[850px] text-left text-sm">
+                    <thead class="bg-slate-50 text-xs uppercase text-slate-600">
+                        <tr>
+                            <th class="p-3">Date</th>
+                            <th class="p-3">Mouvement</th>
+                            <th class="p-3">Article</th>
+                            <th class="p-3 text-right">Quantité</th>
+                            <th class="p-3">Motif</th>
+                            <th class="p-3 text-right">Prix unitaire</th>
+                            <th class="p-3 text-right">Valeur</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for movement in movements %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="whitespace-nowrap p-3">{{ movement.date.strftime('%d/%m/%Y %H:%M') if movement.date else '—' }}</td>
+                            <td class="p-3"><span class="rounded px-2 py-1 text-xs font-bold {% if movement.type == 'ENTREE' %}bg-emerald-100 text-emerald-900{% else %}bg-amber-100 text-amber-900{% endif %}">{{ movement.type }}</span></td>
+                            <td class="p-3 font-semibold">{{ movement.article_name or 'Article supprimé' }}{% if movement.reference %}<span class="block text-xs font-normal text-slate-500">{{ movement.reference }}</span>{% endif %}</td>
+                            <td class="p-3 text-right font-semibold">{{ movement.quantity }}</td>
+                            <td class="max-w-xs p-3">{{ movement.reason or '—' }}{% if movement.supplier %}<span class="block text-xs text-slate-500">Fournisseur : {{ movement.supplier }}</span>{% endif %}{% if movement.invoice_number %}<span class="block text-xs text-slate-500">Facture : {{ movement.invoice_number }}</span>{% endif %}</td>
+                            <td class="whitespace-nowrap p-3 text-right">{% if movement.unit_price is not none %}{{ "%.2f"|format(movement.unit_price) }} €{% if movement.uses_current_price %}<span class="block text-xs font-normal text-slate-500">prix actuel (ancien mouvement)</span>{% endif %}{% else %}—{% endif %}</td>
+                            <td class="whitespace-nowrap p-3 text-right font-semibold">{% if movement.movement_value is not none %}{{ "%.2f"|format(movement.movement_value) }} €{% else %}—{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="p-8 text-center text-sm text-slate-500">Aucun mouvement sur cette période pour ce filtre.</p>
+            {% endif %}
+        </section>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
+
 # --- EDIT ARTICLE TEMPLATE ---
 EDIT_ARTICLE_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="max-w-2xl mx-auto space-y-6">
         {% if article_created %}
-        <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Imprimez son QR code : le scanner avec l’appareil photo du téléphone ouvre directement la sortie de stock. Une connexion sera demandée si nécessaire.</p>
+        <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Imprimez son QR code : le scanner avec l’appareil photo du téléphone ouvre directement le choix Entrée ou Sortie de stock. Une connexion sera demandée si nécessaire.</p>
         {% endif %}
         <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4 no-print">
             <div class="flex justify-between items-center pb-3 border-b border-slate-200">
@@ -1185,7 +1325,7 @@ EDIT_ARTICLE_TEMPLATE = (
         </div>
         <section class="rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
             <h2 class="text-lg font-bold text-slate-900">QR code de l’article</h2>
-            <p class="mt-1 text-sm text-slate-600">Scannez ce code avec l’appareil photo du téléphone : il ouvre directement la sortie de stock pour cet article. Si vous n’êtes pas connecté, l’application demandera vos identifiants puis reprendra cette opération.</p>
+            <p class="mt-1 text-sm text-slate-600">Scannez ce code avec l’appareil photo du téléphone : il ouvre le choix Entrée ou Sortie pour cet article. Si vous n’êtes pas connecté, l’application demandera vos identifiants puis reprendra cette opération.</p>
             <div class="mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
                 <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
             </div>
@@ -1411,6 +1551,17 @@ def entry_form():
   preselected_article_id = optional_integer(
       request.args.get("article_id"), "article_id"
   )
+  selected_article = next(
+      (
+          item
+          for item in articles
+          if item["id"] == preselected_article_id
+      ),
+      None,
+  )
+  mode = request.args.get("mode", "")
+  if mode not in {"", "choose", "entry", "exit"}:
+    abort(400, description="Mode de mouvement invalide.")
   return render_template_string(
       ENTRY_TEMPLATE,
       active_page="entry",
@@ -1423,7 +1574,10 @@ def entry_form():
       preselected_article_found=any(
           item["id"] == preselected_article_id for item in articles
       ),
-      start_exit_mode=request.args.get("mode") == "exit",
+      selected_article=selected_article,
+      start_exit_mode=mode == "exit",
+      start_entry_mode=mode == "entry",
+      start_choice_mode=mode == "choose",
   )
 
 
@@ -1536,6 +1690,69 @@ def stock_view():
   )
 
 
+@app.route("/movements")
+def movement_report():
+  today = datetime.date.today()
+  default_from = today.replace(day=1)
+  date_from_text = request.args.get("date_from", default_from.isoformat())
+  date_to_text = request.args.get("date_to", today.isoformat())
+  try:
+    date_from = datetime.date.fromisoformat(date_from_text)
+    date_to = datetime.date.fromisoformat(date_to_text)
+  except ValueError:
+    abort(400, description="La période demandée est invalide.")
+  if date_from > date_to:
+    abort(400, description="La date de début doit précéder ou égaler la date de fin.")
+  current_article_id = optional_integer(
+      request.args.get("article_id"), "article_id"
+  )
+
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("SELECT id, name, reference FROM articles ORDER BY name")
+  articles = cur.fetchall()
+  query = """
+      SELECT m.id, m.type, m.quantity, m.reason, m.date, m.supplier,
+             m.invoice_number, a.name AS article_name, a.reference,
+             m.unit_price AS recorded_unit_price,
+             m.unit_price IS NULL AS uses_current_price,
+             CASE WHEN m.unit_price IS NULL THEN a.price ELSE m.unit_price END
+                 AS unit_price
+      FROM movements m
+      LEFT JOIN articles a ON a.id = m.article_id
+      WHERE m.date >= %s AND m.date < %s + INTERVAL '1 day'
+  """
+  params = [date_from, date_to]
+  if current_article_id:
+    query += " AND m.article_id = %s"
+    params.append(current_article_id)
+  query += " ORDER BY m.date DESC, m.id DESC"
+  cur.execute(query, params)
+  movements = cur.fetchall()
+  cur.close()
+
+  total_movement_value = 0.0
+  for movement in movements:
+    unit_price = movement["unit_price"]
+    movement["movement_value"] = (
+        movement["quantity"] * unit_price if unit_price is not None else None
+    )
+    if movement["movement_value"] is not None:
+      total_movement_value += movement["movement_value"]
+
+  return render_template_string(
+      MOVEMENTS_TEMPLATE,
+      active_page="movements",
+      articles=articles,
+      movements=movements,
+      date_from=date_from.isoformat(),
+      date_to=date_to.isoformat(),
+      current_article_id=current_article_id,
+      total_movement_value=total_movement_value,
+      total_stock_value=calculate_total_stock_value(),
+  )
+
+
 @app.route("/edit/<int:id>", methods=["GET", "POST"])
 def edit_article(id):
   db = get_db()
@@ -1561,7 +1778,7 @@ def edit_article(id):
     location_id = optional_integer(request.form.get("location_id"), "location_id")
     equipment_id = optional_integer(request.form.get("equipment_id"), "equipment_id")
 
-    cur.execute("SELECT quantity FROM articles WHERE id = %s FOR UPDATE", (id,))
+    cur.execute("SELECT quantity, price FROM articles WHERE id = %s FOR UPDATE", (id,))
     article = cur.fetchone()
     if article is None:
       abort(404)
@@ -1595,13 +1812,14 @@ def edit_article(id):
     if quantity_delta:
       cur.execute(
           """
-              INSERT INTO movements (article_id, type, quantity, reason, date)
-              VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+              INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
+              VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
           """,
           (
               id,
               "ENTREE" if quantity_delta > 0 else "SORTIE",
               abs(quantity_delta),
+              price,
               "Correction de stock via modification de l'article",
           ),
       )
@@ -1632,7 +1850,7 @@ def edit_article(id):
       article_created=request.args.get("created") == "1",
       qr_code_data=article_qr_code_data(
           APP_BASE_URL + url_for(
-              "entry_form", article_id=id, mode="exit"
+              "entry_form", article_id=id, mode="choose"
           )
       ),
   )
@@ -1888,14 +2106,47 @@ def add_article():
 
   cur.execute(
       """
-        INSERT INTO movements (article_id, type, quantity, supplier, invoice_number, reason, date) 
-        VALUES (%s, 'ENTREE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO movements (article_id, type, quantity, unit_price, supplier, invoice_number, reason, date) 
+        VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
     """,
-      (article_id, quantity, supplier, invoice_number, reason),
+      (article_id, quantity, price, supplier, invoice_number, reason),
   )
   db.commit()
   cur.close()
   return redirect(url_for("edit_article", id=article_id, created=1))
+
+
+@app.route("/movement_entry", methods=["POST"])
+def movement_entry():
+  db = get_db()
+  cur = db.cursor()
+  article_id = form_integer("article_id", minimum=1)
+  qty = form_integer("qty", minimum=1)
+  reason = request.form.get("reason", "").strip() or "Réapprovisionnement"
+
+  cur.execute(
+      """
+          UPDATE articles SET quantity = quantity + %s
+          WHERE id = %s
+          RETURNING price
+      """,
+      (qty, article_id),
+  )
+  article = cur.fetchone()
+  if article is None:
+    db.rollback()
+    cur.close()
+    abort(404, description="Article introuvable.")
+  cur.execute(
+      """
+          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
+          VALUES (%s, 'ENTREE', %s, %s, %s, CURRENT_TIMESTAMP)
+      """,
+      (article_id, qty, article["price"] or 0.0, reason),
+  )
+  db.commit()
+  cur.close()
+  return redirect(url_for("entry_form", article_id=article_id, mode="choose"))
 
 
 @app.route("/movement_exit", methods=["POST"])
@@ -1912,19 +2163,20 @@ def movement_exit():
       """
           UPDATE articles SET quantity = quantity - %s
           WHERE id = %s AND quantity >= %s
-          RETURNING id
+          RETURNING id, price
       """,
       (qty, article_id, qty),
   )
-  if cur.fetchone() is None:
+  article = cur.fetchone()
+  if article is None:
     db.rollback()
     abort(400, description="Article inexistant ou stock insuffisant.")
   cur.execute(
       """
-          INSERT INTO movements (article_id, type, quantity, reason, date)
-          VALUES (%s, 'SORTIE', %s, %s, CURRENT_TIMESTAMP)
+          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
+          VALUES (%s, 'SORTIE', %s, %s, %s, CURRENT_TIMESTAMP)
       """,
-      (article_id, qty, reason),
+      (article_id, qty, article["price"] or 0.0, reason),
   )
   db.commit()
   cur.close()
@@ -1939,7 +2191,7 @@ def update_quantity(id):
   action = request.form.get("action")
   if action not in {"plus", "minus"}:
     abort(400, description="Action de mise à jour invalide.")
-  cur.execute("SELECT quantity FROM articles WHERE id = %s FOR UPDATE", (id,))
+  cur.execute("SELECT quantity, price FROM articles WHERE id = %s FOR UPDATE", (id,))
   item = cur.fetchone()
   if item is None:
     abort(404)
@@ -1950,10 +2202,15 @@ def update_quantity(id):
   cur.execute("UPDATE articles SET quantity = quantity + %s WHERE id = %s", (delta, id))
   cur.execute(
       """
-          INSERT INTO movements (article_id, type, quantity, reason, date)
-          VALUES (%s, %s, 1, %s, CURRENT_TIMESTAMP)
+          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
+          VALUES (%s, %s, 1, %s, %s, CURRENT_TIMESTAMP)
       """,
-      (id, "ENTREE" if delta > 0 else "SORTIE", "Ajustement manuel du stock"),
+      (
+          id,
+          "ENTREE" if delta > 0 else "SORTIE",
+          item["price"] or 0.0,
+          "Ajustement manuel du stock",
+      ),
   )
   db.commit()
   cur.close()
