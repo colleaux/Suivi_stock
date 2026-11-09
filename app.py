@@ -41,6 +41,9 @@ app.config["SESSION_COOKIE_SECURE"] = (
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+APP_BASE_URL = os.environ.get(
+    "APP_BASE_URL", "https://suivi-stock.onrender.com"
+).rstrip("/")
 APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
@@ -122,14 +125,14 @@ def save_uploaded_image(upload):
   return filename
 
 
-def article_qr_code_data(article_id):
+def article_qr_code_data(article_url):
   qr_code = qrcode.QRCode(
       version=None,
       error_correction=qrcode.constants.ERROR_CORRECT_M,
       box_size=10,
       border=4,
   )
-  qr_code.add_data(f"STOCK:{article_id}")
+  qr_code.add_data(article_url)
   qr_code.make(fit=True)
   image = qr_code.make_image(fill_color="black", back_color="white")
   image_buffer = io.BytesIO()
@@ -726,6 +729,18 @@ ENTRY_TEMPLATE = (
             });
         })();
 
+        {% if start_exit_mode %}
+        window.addEventListener("load", () => {
+            document.getElementById("stock-exit").scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+            });
+            if ({{ 'true' if preselected_article_found else 'false' }}) {
+                document.getElementById("exit-quantity").focus({ preventScroll: true });
+            }
+        });
+        {% endif %}
+
         (() => {
             const startButton = document.getElementById("start-qr-scanner");
             const reader = document.getElementById("qr-reader");
@@ -768,20 +783,39 @@ ENTRY_TEMPLATE = (
                         { inversionAttempts: "dontInvert" }
                     );
                     if (result) {
-                        const match = result.data.match(/^STOCK:(\\d+)$/i);
-                        if (!match) {
+                        let articleId = null;
+                        const legacyMatch = result.data.match(/^STOCK:(\\d+)$/i);
+                        if (legacyMatch) {
+                            articleId = legacyMatch[1];
+                        } else {
+                            try {
+                                const scannedUrl = new URL(result.data);
+                                const scannedId = scannedUrl.searchParams.get("article_id") || "";
+                                if (
+                                    scannedUrl.origin === window.location.origin
+                                    && scannedUrl.pathname === "/entry"
+                                    && scannedUrl.searchParams.get("mode") === "exit"
+                                    && /^\\d+$/.test(scannedId)
+                                ) {
+                                    articleId = scannedId;
+                                }
+                            } catch (error) {
+                                articleId = null;
+                            }
+                        }
+                        if (!articleId) {
                             if (lastInvalidText !== result.data) {
                                 status.textContent = "Ce QR code ne correspond pas à un article de cette application.";
                                 lastInvalidText = result.data;
                             }
                         } else {
                             const option = Array.from(articleSelect.options).find(
-                                (item) => item.value === match[1]
+                                (item) => item.value === articleId
                             );
                             if (!option) {
                                 status.textContent = "Article introuvable. Actualisez la page puis réessayez.";
                             } else {
-                                articleSelect.value = match[1];
+                                articleSelect.value = articleId;
                                 status.textContent = "Article sélectionné : " + option.text;
                                 stopScanner();
                                 startButton.textContent = "📷 Scanner un autre article";
@@ -1060,7 +1094,7 @@ EDIT_ARTICLE_TEMPLATE = (
     + """
     <div class="max-w-2xl mx-auto space-y-6">
         {% if article_created %}
-        <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Son QR code est prêt à être imprimé ou téléchargé.</p>
+        <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Imprimez son QR code : le scanner avec l’appareil photo du téléphone ouvre directement la sortie de stock. Une connexion sera demandée si nécessaire.</p>
         {% endif %}
         <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4 no-print">
             <div class="flex justify-between items-center pb-3 border-b border-slate-200">
@@ -1151,7 +1185,7 @@ EDIT_ARTICLE_TEMPLATE = (
         </div>
         <section class="rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
             <h2 class="text-lg font-bold text-slate-900">QR code de l’article</h2>
-            <p class="mt-1 text-sm text-slate-600">Scannez ce code dans la section « Sortie de Stock » pour sélectionner rapidement l’article.</p>
+            <p class="mt-1 text-sm text-slate-600">Scannez ce code avec l’appareil photo du téléphone : il ouvre directement la sortie de stock pour cet article. Si vous n’êtes pas connecté, l’application demandera vos identifiants puis reprendra cette opération.</p>
             <div class="mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
                 <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
             </div>
@@ -1389,6 +1423,7 @@ def entry_form():
       preselected_article_found=any(
           item["id"] == preselected_article_id for item in articles
       ),
+      start_exit_mode=request.args.get("mode") == "exit",
   )
 
 
@@ -1595,7 +1630,11 @@ def edit_article(id):
       equipment=equipment,
       total_stock_value=total_val,
       article_created=request.args.get("created") == "1",
-      qr_code_data=article_qr_code_data(id),
+      qr_code_data=article_qr_code_data(
+          APP_BASE_URL + url_for(
+              "entry_form", article_id=id, mode="exit"
+          )
+      ),
   )
 
 
