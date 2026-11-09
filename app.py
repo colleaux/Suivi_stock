@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hmac
 import io
@@ -8,6 +9,7 @@ import secrets
 import warnings
 
 import psycopg
+import qrcode
 from PIL import Image, UnidentifiedImageError
 from psycopg.rows import dict_row
 from flask import (
@@ -118,6 +120,22 @@ def save_uploaded_image(upload):
   with open(os.path.join(app.config["UPLOAD_FOLDER"], filename), "wb") as image_file:
     image_file.write(image_data)
   return filename
+
+
+def article_qr_code_data(article_id):
+  qr_code = qrcode.QRCode(
+      version=None,
+      error_correction=qrcode.constants.ERROR_CORRECT_M,
+      box_size=10,
+      border=4,
+  )
+  qr_code.add_data(f"STOCK:{article_id}")
+  qr_code.make(fit=True)
+  image = qr_code.make_image(fill_color="black", back_color="white")
+  image_buffer = io.BytesIO()
+  image.save(image_buffer, format="PNG")
+  encoded_image = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+  return f"data:image/png;base64,{encoded_image}"
 
 
 def form_integer(field, default=None, minimum=None):
@@ -641,20 +659,30 @@ ENTRY_TEMPLATE = (
 
                     <form action="/movement_exit" method="POST" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                            <p class="text-sm font-bold text-amber-950">Scanner le QR code de l’article</p>
+                            <p class="mt-1 text-xs text-amber-900">Autorisez l’accès à la caméra, puis placez le QR code dans le cadre. Vous pouvez aussi choisir l’article dans la liste ci-dessous.</p>
+                            <button type="button" id="start-qr-scanner" class="mt-3 min-h-11 rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">📷 Scanner un QR code</button>
+                            <div id="qr-reader" class="mt-3 hidden max-w-md overflow-hidden rounded-lg"></div>
+                            <p id="qr-scan-status" class="mt-2 text-sm text-slate-700" role="status" aria-live="polite"></p>
+                        </div>
                         <div>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
-                            <select name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
+                            <select id="exit-article-id" name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
                                 <option value="">-- Choisir une pièce --</option>
                                 {% for item in articles %}
-                                <option value="{{ item.id }}">{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
+                                <option value="{{ item.id }}" {% if preselected_article_id == item.id %}selected{% endif %}>{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
                                 {% endfor %}
                             </select>
                         </div>
+                        {% if preselected_article_id and not preselected_article_found %}
+                        <p class="rounded-lg bg-rose-50 p-3 text-sm text-rose-800" role="alert">Cet article n’existe plus dans l’inventaire. Vérifiez le QR code ou choisissez un article dans la liste.</p>
+                        {% endif %}
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Quantité sortie *</label>
-                                <input type="number" name="qty" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
+                                <input id="exit-quantity" type="number" name="qty" value="1" min="1" required class="w-full text-xs p-2.5 border border-slate-300 rounded font-bold">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 mb-1">Motif / Intervenant *</label>
@@ -670,6 +698,7 @@ ENTRY_TEMPLATE = (
             </div>
         </section>
     </div>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script>
         (() => {
             const input = document.getElementById("article-photo");
@@ -692,6 +721,101 @@ ENTRY_TEMPLATE = (
                 filename.textContent = file.name;
                 preview.classList.remove("hidden");
                 preview.classList.add("flex");
+            });
+        })();
+
+        (() => {
+            const startButton = document.getElementById("start-qr-scanner");
+            const reader = document.getElementById("qr-reader");
+            const status = document.getElementById("qr-scan-status");
+            const articleSelect = document.getElementById("exit-article-id");
+            let scanner = null;
+            let scanning = false;
+            let scanComplete = false;
+
+            const stopScanner = async () => {
+                if (scanning) {
+                    await scanner.stop();
+                    scanning = false;
+                }
+                await scanner.clear();
+            };
+
+            startButton.addEventListener("click", async () => {
+                if (!window.Html5Qrcode) {
+                    status.textContent = "Le module de scan n’a pas pu être chargé. Vérifiez votre connexion Internet ou choisissez l’article dans la liste.";
+                    return;
+                }
+                if (!window.isSecureContext) {
+                    status.textContent = "La caméra nécessite une connexion HTTPS. Ouvrez l’application avec son adresse sécurisée.";
+                    return;
+                }
+                if (scanning) {
+                    try {
+                        await stopScanner();
+                        scanner = null;
+                        reader.classList.add("hidden");
+                        startButton.textContent = "📷 Reprendre le scan";
+                    } catch (error) {
+                        status.textContent = "Impossible d’arrêter le scanner : " + String(error);
+                    }
+                    return;
+                }
+
+                reader.classList.remove("hidden");
+                status.textContent = "Initialisation de la caméra…";
+                scanner = new Html5Qrcode("qr-reader");
+                scanComplete = false;
+                try {
+                    const startPromise = scanner.start(
+                        { facingMode: "environment" },
+                        { fps: 10, qrbox: { width: 240, height: 240 } },
+                        async (decodedText) => {
+                            const match = decodedText.match(/^STOCK:(\\d+)$/i);
+                            if (!match) {
+                                status.textContent = "Ce QR code ne correspond pas à un article de cette application.";
+                                return;
+                            }
+                            const option = Array.from(articleSelect.options).find(
+                                (item) => item.value === match[1]
+                            );
+                            if (!option) {
+                                status.textContent = "Article introuvable. Actualisez la page puis réessayez.";
+                                return;
+                            }
+                            if (scanComplete) return;
+                            scanComplete = true;
+                            articleSelect.value = match[1];
+                            status.textContent = "Article sélectionné : " + option.text;
+                            try {
+                                await stopScanner();
+                            } catch (error) {
+                                status.textContent += " (La caméra n’a pas pu s’arrêter automatiquement : " + String(error) + ")";
+                            }
+                            reader.classList.add("hidden");
+                            startButton.textContent = "📷 Scanner un autre article";
+                            document.getElementById("exit-quantity").focus();
+                            document.getElementById("stock-exit").scrollIntoView({ behavior: "smooth" });
+                        },
+                        () => {}
+                    );
+                    scanning = true;
+                    await startPromise;
+                    if (scanComplete) return;
+                    startButton.textContent = "Arrêter le scan";
+                    status.textContent = "Pointez la caméra vers le QR code de l’article.";
+                } catch (error) {
+                    scanning = false;
+                    reader.classList.add("hidden");
+                    try {
+                        await scanner.clear();
+                        scanner = null;
+                    } catch (clearError) {
+                        status.textContent = "Impossible d’arrêter le scanner : " + String(clearError);
+                        return;
+                    }
+                    status.textContent = "Accès à la caméra impossible. Vérifiez les autorisations du navigateur ou choisissez l’article dans la liste. Détail : " + String(error);
+                }
             });
         })();
     </script>
@@ -917,7 +1041,10 @@ EDIT_ARTICLE_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="max-w-2xl mx-auto space-y-6">
-        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4">
+        {% if article_created %}
+        <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Son QR code est prêt à être imprimé ou téléchargé.</p>
+        {% endif %}
+        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4 no-print">
             <div class="flex justify-between items-center pb-3 border-b border-slate-200">
                 <h1 class="text-base font-bold text-slate-900">✏️ Modifier l'Article</h1>
                 <a href="/stock" class="text-xs text-emerald-800 hover:underline font-semibold">← Retour au tableau</a>
@@ -1004,6 +1131,19 @@ EDIT_ARTICLE_TEMPLATE = (
                 </div>
             </form>
         </div>
+        <section class="rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
+            <h2 class="text-lg font-bold text-slate-900">QR code de l’article</h2>
+            <p class="mt-1 text-sm text-slate-600">Scannez ce code dans la section « Sortie de Stock » pour sélectionner rapidement l’article.</p>
+            <div class="mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
+                <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
+            </div>
+            <p class="mt-3 font-semibold text-slate-900">{{ article.name }}</p>
+            <p class="text-sm text-slate-600">Référence : {{ article.reference or 'Non renseignée' }}</p>
+            <div class="mt-4 flex flex-col justify-center gap-2 sm:flex-row no-print">
+                <button type="button" onclick="window.print()" class="min-h-11 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-900">Imprimer le QR code</button>
+                <a href="{{ qr_code_data }}" download="qr-article-{{ article.id }}.png" class="flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Télécharger l’image</a>
+            </div>
+        </section>
     </div>
 """
     + LAYOUT_FOOTER
@@ -1216,6 +1356,9 @@ def entry_form():
   cur.close()
   total_val = calculate_total_stock_value()
   today_str = datetime.date.today().strftime("%Y-%m-%d")
+  preselected_article_id = optional_integer(
+      request.args.get("article_id"), "article_id"
+  )
   return render_template_string(
       ENTRY_TEMPLATE,
       active_page="entry",
@@ -1224,6 +1367,10 @@ def entry_form():
       articles=articles,
       total_stock_value=total_val,
       today_date=today_str,
+      preselected_article_id=preselected_article_id,
+      preselected_article_found=any(
+          item["id"] == preselected_article_id for item in articles
+      ),
   )
 
 
@@ -1408,10 +1555,13 @@ def edit_article(id):
 
     db.commit()
     cur.close()
-    return redirect(url_for("stock_view"))
+    return redirect(url_for("edit_article", id=id))
 
   cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
   article = cur.fetchone()
+  if article is None:
+    cur.close()
+    abort(404)
   cur.execute("SELECT * FROM locations ORDER BY name")
   locations = cur.fetchall()
   cur.execute("SELECT * FROM equipment ORDER BY name")
@@ -1426,6 +1576,8 @@ def edit_article(id):
       locations=locations,
       equipment=equipment,
       total_stock_value=total_val,
+      article_created=request.args.get("created") == "1",
+      qr_code_data=article_qr_code_data(id),
   )
 
 
@@ -1686,7 +1838,7 @@ def add_article():
   )
   db.commit()
   cur.close()
-  return redirect(url_for("stock_view"))
+  return redirect(url_for("edit_article", id=article_id, created=1))
 
 
 @app.route("/movement_exit", methods=["POST"])
