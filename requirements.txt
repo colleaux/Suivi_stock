@@ -1,6 +1,6 @@
 Flask==3.0.2
 Werkzeug==3.0.1
 gunicorn==21.2.0
-psycopg[binary]==3.2.6
+psycopg[binary]==3.2.10
 Pillow==11.1.0
 qrcode[pil]==8.2
