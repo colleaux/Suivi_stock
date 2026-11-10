@@ -3,6 +3,7 @@ import datetime
 import hmac
 import io
 import math
+import mimetypes
 import os
 import re
 import secrets
@@ -10,6 +11,8 @@ import warnings
 
 import psycopg
 import qrcode
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from PIL import Image, UnidentifiedImageError
 from psycopg.rows import dict_row
 from flask import (
@@ -34,6 +37,33 @@ UPLOAD_FOLDER = os.environ.get(
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_SETTINGS = (
+    R2_BUCKET_NAME,
+    R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY,
+)
+if any(R2_SETTINGS) and not all(R2_SETTINGS):
+  raise RuntimeError(
+      "Les variables R2_BUCKET_NAME, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID et "
+      "R2_SECRET_ACCESS_KEY doivent toutes être définies."
+  )
+R2_ENABLED = all(R2_SETTINGS)
+R2_CLIENT = (
+    boto3.client(
+        "s3",
+        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name="auto",
+    )
+    if R2_ENABLED
+    else None
+)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -101,6 +131,58 @@ def allowed_file(filename):
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
+  if "/" in filename or "\\" in filename or filename in {".", ".."}:
+    abort(404)
+  if R2_ENABLED:
+    try:
+      response = R2_CLIENT.get_object(Bucket=R2_BUCKET_NAME, Key=filename)
+      try:
+        image_data = response["Body"].read()
+      finally:
+        response["Body"].close()
+      content_type = response.get("ContentType") or mimetypes.guess_type(filename)[0]
+      if not content_type:
+        content_type = "application/octet-stream"
+      image_response = app.response_class(
+          image_data,
+          mimetype=content_type,
+          direct_passthrough=False,
+      )
+      image_response.headers["Cache-Control"] = "private, max-age=3600"
+      return image_response
+    except ClientError as error:
+      error_code = error.response.get("Error", {}).get("Code")
+      status_code = error.response.get("ResponseMetadata", {}).get(
+          "HTTPStatusCode"
+      )
+      if error_code not in {"NoSuchKey", "NotFound", "404"} and status_code != 404:
+        app.logger.exception("R2 image retrieval failed for %s", filename)
+        abort(502, description="La photo ne peut pas être récupérée depuis R2.")
+      local_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+      if not os.path.isfile(local_path):
+        abort(404)
+      try:
+        with open(local_path, "rb") as image_file:
+          image_data = image_file.read()
+        R2_CLIENT.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=filename,
+            Body=image_data,
+            ContentType=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+        )
+      except (OSError, BotoCoreError):
+        app.logger.exception("Could not migrate local image to R2: %s", filename)
+        abort(502, description="La photo locale n'a pas pu être transférée vers R2.")
+      local_response = app.response_class(
+          image_data,
+          mimetype=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+          direct_passthrough=False,
+      )
+      local_response.headers["Cache-Control"] = "private, max-age=3600"
+      return local_response
+    except BotoCoreError:
+      app.logger.exception("R2 image retrieval failed for %s", filename)
+      abort(502, description="La photo ne peut pas être récupérée depuis R2.")
   return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
 
@@ -128,6 +210,18 @@ def save_uploaded_image(upload):
   if image_format != expected_formats[extension]:
     abort(400, description="L'extension ne correspond pas au format de l'image.")
   filename = f"art_{secrets.token_hex(8)}_{secure_filename(upload.filename)}"
+  if R2_ENABLED:
+    try:
+      R2_CLIENT.put_object(
+          Bucket=R2_BUCKET_NAME,
+          Key=filename,
+          Body=image_data,
+          ContentType=f"image/{'jpeg' if extension in {'jpg', 'jpeg'} else extension}",
+      )
+    except BotoCoreError:
+      app.logger.exception("R2 image upload failed.")
+      abort(502, description="La photo n'a pas pu être enregistrée dans R2.")
+    return filename
   with open(os.path.join(app.config["UPLOAD_FOLDER"], filename), "wb") as image_file:
     image_file.write(image_data)
   return filename

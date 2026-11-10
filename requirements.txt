@@ -4,3 +4,4 @@ gunicorn==21.2.0
 psycopg[binary]==3.2.10
 Pillow==11.1.0
 qrcode[pil]==8.2
+boto3==1.43.127
