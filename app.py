@@ -506,6 +506,10 @@ def init_db():
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price REAL;
+        CREATE INDEX IF NOT EXISTS idx_movements_date_id
+            ON movements (date DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_movements_article_date_id
+            ON movements (article_id, date DESC, id DESC);
     """)
   cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
   try:
@@ -1338,7 +1342,7 @@ MOVEMENTS_TEMPLATE = (
             <div class="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
                 <div>
                     <h2 class="font-bold text-slate-900">Résultats</h2>
-                    <p class="text-sm text-slate-600">{{ movements|length }} mouvement(s) du {{ date_from }} au {{ date_to }}</p>
+                    <p class="text-sm text-slate-600">{{ total_movement_count }} mouvement(s) du {{ date_from }} au {{ date_to }} · page {{ current_page }} / {{ total_pages }}</p>
                 </div>
                 <div class="text-sm font-bold text-slate-800">Valeur totale des mouvements : {{ "%.2f"|format(total_movement_value) }} €</div>
             </div>
@@ -1373,6 +1377,21 @@ MOVEMENTS_TEMPLATE = (
             </div>
             {% else %}
             <p class="p-8 text-center text-sm text-slate-500">Aucun mouvement sur cette période pour ce filtre.</p>
+            {% endif %}
+            {% if total_pages > 1 %}
+            <nav class="flex items-center justify-between border-t border-slate-200 p-4" aria-label="Pagination des mouvements">
+                {% if has_previous_page %}
+                <a href="{{ url_for('movement_report', date_from=date_from, date_to=date_to, article_id=current_article_id, page=current_page - 1) }}" class="min-h-11 rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">← Précédent</a>
+                {% else %}
+                <span class="min-h-11 rounded border border-slate-200 px-4 py-2 text-sm text-slate-400">← Précédent</span>
+                {% endif %}
+                <span class="text-sm text-slate-600">Page {{ current_page }} / {{ total_pages }}</span>
+                {% if has_next_page %}
+                <a href="{{ url_for('movement_report', date_from=date_from, date_to=date_to, article_id=current_article_id, page=current_page + 1) }}" class="min-h-11 rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Suivant →</a>
+                {% else %}
+                <span class="min-h-11 rounded border border-slate-200 px-4 py-2 text-sm text-slate-400">Suivant →</span>
+                {% endif %}
+            </nav>
             {% endif %}
         </section>
     </div>
@@ -1671,16 +1690,18 @@ SETTINGS_TEMPLATE = (
 # --- ROUTES FLASK ---
 
 
-def calculate_total_stock_value(articles_list=None):
+def calculate_total_stock_value():
   db = get_db()
   cur = db.cursor()
-  if articles_list is None:
-    cur.execute("SELECT quantity, price FROM articles")
-    articles_list = cur.fetchall()
-  cur.close()
-  return sum(
-      (item["quantity"] * (item["price"] or 0.0)) for item in articles_list
+  cur.execute(
+      """
+          SELECT COALESCE(SUM(quantity * COALESCE(price, 0)), 0) AS total
+          FROM articles
+      """
   )
+  total = cur.fetchone()["total"]
+  cur.close()
+  return total
 
 
 @app.route("/")
@@ -1848,6 +1869,7 @@ def stock_view():
 
 @app.route("/movements")
 def movement_report():
+  page_size = 50
   today = datetime.date.today()
   default_from = today.replace(day=1)
   date_from_text = request.args.get("date_from", default_from.isoformat())
@@ -1862,11 +1884,38 @@ def movement_report():
   current_article_id = optional_integer(
       request.args.get("article_id"), "article_id"
   )
+  requested_page = optional_integer(request.args.get("page"), "page") or 1
 
   db = get_db()
   cur = db.cursor()
   cur.execute("SELECT id, name, reference FROM articles ORDER BY name")
   articles = cur.fetchall()
+  where_clause = "m.date >= %s AND m.date < %s + INTERVAL '1 day'"
+  params = [date_from, date_to]
+  if current_article_id:
+    where_clause += " AND m.article_id = %s"
+    params.append(current_article_id)
+  cur.execute(
+      """
+          SELECT COUNT(*) AS total_count,
+                 COALESCE(
+                     SUM(
+                         m.quantity
+                         * CASE WHEN m.unit_price IS NULL THEN a.price ELSE m.unit_price END
+                     ),
+                     0
+                 ) AS total_value
+          FROM movements m
+          LEFT JOIN articles a ON a.id = m.article_id
+          WHERE
+      """ + where_clause,
+      params,
+  )
+  movement_summary = cur.fetchone()
+  total_movement_count = movement_summary["total_count"]
+  total_pages = max(1, (total_movement_count + page_size - 1) // page_size)
+  current_page = min(requested_page, total_pages)
+
   query = """
       SELECT m.id, m.type, m.quantity, m.reason, m.date, m.supplier,
              m.invoice_number, a.name AS article_name, a.reference,
@@ -1876,25 +1925,20 @@ def movement_report():
                  AS unit_price
       FROM movements m
       LEFT JOIN articles a ON a.id = m.article_id
-      WHERE m.date >= %s AND m.date < %s + INTERVAL '1 day'
-  """
-  params = [date_from, date_to]
-  if current_article_id:
-    query += " AND m.article_id = %s"
-    params.append(current_article_id)
-  query += " ORDER BY m.date DESC, m.id DESC"
-  cur.execute(query, params)
+      WHERE
+  """ + where_clause
+  query += " ORDER BY m.date DESC, m.id DESC LIMIT %s OFFSET %s"
+  page_params = [*params, page_size, (current_page - 1) * page_size]
+  cur.execute(query, page_params)
   movements = cur.fetchall()
   cur.close()
 
-  total_movement_value = 0.0
+  total_movement_value = movement_summary["total_value"] or 0.0
   for movement in movements:
     unit_price = movement["unit_price"]
     movement["movement_value"] = (
         movement["quantity"] * unit_price if unit_price is not None else None
     )
-    if movement["movement_value"] is not None:
-      total_movement_value += movement["movement_value"]
 
   return render_template_string(
       MOVEMENTS_TEMPLATE,
@@ -1905,6 +1949,11 @@ def movement_report():
       date_to=date_to.isoformat(),
       current_article_id=current_article_id,
       total_movement_value=total_movement_value,
+      total_movement_count=total_movement_count,
+      current_page=current_page,
+      total_pages=total_pages,
+      has_previous_page=current_page > 1,
+      has_next_page=current_page < total_pages,
       total_stock_value=calculate_total_stock_value(),
   )
 
