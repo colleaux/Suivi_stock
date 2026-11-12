@@ -1417,7 +1417,7 @@ MONTHLY_CLOSE_TEMPLATE = (
             .closing-table th, .closing-table td { padding: 4px !important; }
             .closing-table thead { display: table-header-group; }
             .closing-table tr { break-inside: avoid; }
-            .closing-section { break-inside: avoid; }
+            .closing-section { break-inside: auto; }
             body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
     </style>
@@ -1440,9 +1440,10 @@ MONTHLY_CLOSE_TEMPLATE = (
                 </div>
             </div>
             <p class="mt-4 rounded-lg border border-emerald-700 bg-emerald-950/40 p-3 text-xs leading-relaxed text-emerald-100">
-                Méthode : CUMP mobile reconstitué à partir des mouvements enregistrés, sans arrondi intermédiaire.
-                Les sorties sont valorisées au coût moyen pondéré avant sortie. Une histoire de stock ou de prix incomplète
-                est signalée dans le détail ; les montants présentés ne remplacent pas une validation comptable.
+                Méthode : CUMP mobile reconstitué par ordre chronologique. Le stock antérieur à l’historique est estimé
+                pour rapprocher les mouvements du stock actuel. En l’absence de coût documenté, le dernier prix d’achat
+                antérieur à la période est utilisé, sinon le prix actuel ; ces montants sont signalés « Estimé ».
+                Cette reconstitution indicative ne remplace pas un inventaire d’ouverture validé.
             </p>
             <p class="mt-2 text-right text-[11px] text-emerald-200">Édité le {{ generated_at }}</p>
         </section>
@@ -1451,9 +1452,9 @@ MONTHLY_CLOSE_TEMPLATE = (
         <section class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="alert">
             <h2 class="font-bold">Points de contrôle avant validation</h2>
             <ul class="mt-1 list-inside list-disc space-y-1">
-                {% if unverified_count %}<li>{{ unverified_count }} article(s) ont un historique de quantité incomplet ou différent du stock actuel ; leurs soldes sont marqués « À vérifier ».</li>{% endif %}
+                {% if unverified_count %}<li>{{ unverified_count }} article(s) ne peuvent pas être rapprochés de façon cohérente au stock actuel ; leurs soldes sont marqués « À vérifier ».</li>{% endif %}
                 {% if unvalued_count %}<li>{{ unvalued_count }} article(s) en stock n’ont pas de coût d’entrée exploitable pour calculer leur CUMP.</li>{% endif %}
-                {% if legacy_price_status_count %}<li>Le caractère estimatif de prix d’entrée anciens n’est pas historisé pour {{ legacy_price_status_count }} article(s) ; vérifiez les justificatifs d’achat.</li>{% endif %}
+                {% if legacy_price_status_count %}<li>Le statut estimatif d’anciens prix n’est pas historisé pour {{ legacy_price_status_count }} article(s) ; ces prix et soldes d’ouverture sont donc estimés.</li>{% endif %}
                 {% if estimated_count %}<li>{{ estimated_count }} article(s) ont un coût d’entrée estimatif ou un statut de prix historique incomplet.</li>{% endif %}
                 {% if orphaned_movement_count %}<li>{{ orphaned_movement_count }} mouvement(s) antérieur(s) à la clôture concernent des articles supprimés et ne peuvent pas être ventilés ; les synthèses sont incomplètes.</li>{% endif %}
             </ul>
@@ -1496,10 +1497,11 @@ MONTHLY_CLOSE_TEMPLATE = (
                     <thead class="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
                         <tr>
                             <th class="p-2">Statut</th>
-                            <th class="p-2">Référence</th>
+                            <th class="p-2">Référence / ID</th>
                             <th class="p-2">Article</th>
                             <th class="p-2">Emplacement / équipement</th>
                             <th class="p-2 text-right">Ouverture Qté</th>
+                            <th class="p-2 text-right">Ouverture €</th>
                             <th class="p-2 text-right">Entrées Qté</th>
                             <th class="p-2 text-right">Entrées €</th>
                             <th class="p-2 text-right">Sorties Qté</th>
@@ -1513,10 +1515,11 @@ MONTHLY_CLOSE_TEMPLATE = (
                         {% for item in monthly_close_rows %}
                         <tr class="{% if item.status == 'À vérifier' %}bg-rose-50{% elif item.status != 'OK' %}bg-amber-50{% else %}hover:bg-slate-50{% endif %}">
                             <td class="whitespace-nowrap p-2 font-semibold {% if item.status == 'À vérifier' %}text-rose-800{% elif item.status != 'OK' %}text-amber-800{% else %}text-emerald-800{% endif %}">{{ item.status }}</td>
-                            <td class="p-2 font-mono">{{ item.reference or '—' }}</td>
+                            <td class="whitespace-nowrap p-2 font-mono">{{ item.reference or ('ID ' ~ item.id|string) }}</td>
                             <td class="p-2 font-semibold text-slate-900">{{ item.name }}{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
                             <td class="p-2">{{ item.location_name }}{% if item.equipment_name %}<span class="block text-slate-500">{{ item.equipment_name }}</span>{% endif %}</td>
                             <td class="p-2 text-right">{{ item.opening_quantity if item.opening_quantity is not none else 'À vérifier' }}</td>
+                            <td class="whitespace-nowrap p-2 text-right">{% if item.opening_value is not none %}{{ "%.2f"|format(item.opening_value) }} €{% else %}—{% endif %}</td>
                             <td class="p-2 text-right">{{ item.entries_quantity }}</td>
                             <td class="whitespace-nowrap p-2 text-right">{% if item.entries_value is not none %}{{ "%.2f"|format(item.entries_value) }} €{% else %}—{% endif %}</td>
                             <td class="p-2 text-right">{{ item.exits_quantity }}</td>
@@ -1526,13 +1529,14 @@ MONTHLY_CLOSE_TEMPLATE = (
                             <td class="whitespace-nowrap p-2 text-right font-bold">{% if item.closing_value is not none %}{{ "%.2f"|format(item.closing_value) }} €{% else %}—{% endif %}</td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="12" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
+                        <tr><td colspan="13" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
                         {% endfor %}
                     </tbody>
                     <tfoot class="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-900">
                         <tr>
-                            <td colspan="4" class="p-2">Totaux des lignes vérifiées / valorisables</td>
+                            <td colspan="4" class="p-2">Totaux des lignes rapprochées · valeurs disponibles</td>
                             <td class="p-2 text-right">{{ opening_quantity }}</td>
+                            <td class="p-2 text-right">{{ "%.2f"|format(opening_value) }} €</td>
                             <td class="p-2 text-right">{{ entries_quantity }}</td>
                             <td class="p-2 text-right">{{ "%.2f"|format(entries_value) }} €</td>
                             <td class="p-2 text-right">{{ exits_quantity }}</td>
@@ -1860,19 +1864,56 @@ def calculate_total_stock_value():
   return total
 
 
-def build_monthly_close_rows(articles, movements, period_start, period_end):
+def build_monthly_close_rows(
+    articles,
+    movements,
+    movement_summaries,
+    period_start,
+    period_end,
+):
   states = {}
   for article in articles:
+    summary = movement_summaries.get(article["id"], {})
+    baseline_quantity = article["current_quantity"] - summary.get(
+        "net_quantity", 0
+    )
+    baseline_valid = not summary.get("has_invalid_movement", False)
+    if baseline_quantity < 0:
+      baseline_valid = False
+    if not baseline_valid:
+      baseline_quantity = max(0, baseline_quantity)
+
+    baseline_price = None
+    try:
+      baseline_price = Decimal(str(article["fallback_price"]))
+    except (InvalidOperation, TypeError, ValueError):
+      pass
+    if baseline_price is not None and (
+        not baseline_price.is_finite() or baseline_price < 0
+    ):
+      baseline_price = None
+
+    baseline_value_known = baseline_quantity == 0 or baseline_price is not None
+    baseline_value = (
+        baseline_quantity * baseline_price
+        if baseline_quantity and baseline_price is not None
+        else Decimal("0")
+    )
+    baseline_estimated = baseline_quantity > 0
     states[article["id"]] = {
         "article": article,
-        "quantity": 0,
-        "value": Decimal("0"),
-        "quantity_known": True,
-        "value_known": True,
-        "estimated": False,
-        "estimate_status_unknown": False,
+        "quantity": baseline_quantity,
+        "value": baseline_value,
+        "quantity_known": baseline_valid,
+        "value_known": baseline_value_known,
+        "estimated": baseline_estimated,
+        "estimate_status_unknown": baseline_estimated,
         "legacy_price_status_seen": False,
-        "has_movement": False,
+        "has_movement": baseline_quantity > 0,
+        "baseline_quantity": baseline_quantity,
+        "baseline_valid": baseline_valid,
+        "last_known_price": baseline_price,
+        "first_movement_date": summary.get("first_movement_date"),
         "opening": None,
         "closing": None,
         "entries_quantity": 0,
@@ -1889,6 +1930,23 @@ def build_monthly_close_rows(articles, movements, period_start, period_end):
   def add_issue(state, message):
     if message not in state["issues"]:
       state["issues"].append(message)
+
+  for state in states.values():
+    if not state["baseline_valid"]:
+      add_issue(
+          state,
+          "Impossible de reconstituer le stock initial à partir du journal et du stock actuel.",
+      )
+    elif state["baseline_quantity"]:
+      add_issue(
+          state,
+          "Stock d'ouverture reconstitué ; valorisation au dernier prix connu (estimation).",
+      )
+      if not state["value_known"]:
+        add_issue(
+            state,
+            "Dernier prix connu absent ou invalide pour valoriser le stock d'ouverture.",
+        )
 
   def snapshot(state):
     quantity = state["quantity"] if state["quantity_known"] else None
@@ -1966,6 +2024,16 @@ def build_monthly_close_rows(articles, movements, period_start, period_end):
         pass
       if price is not None and (not price.is_finite() or price < 0):
         price = None
+      used_fallback_price = price is None
+      if used_fallback_price:
+        try:
+          price = state["last_known_price"]
+          if price is None:
+            price = Decimal(str(state["article"]["fallback_price"]))
+        except (InvalidOperation, TypeError, ValueError):
+          price = None
+        if price is not None and (not price.is_finite() or price < 0):
+          price = None
 
       if in_period:
         state["entries_quantity"] += quantity
@@ -1982,7 +2050,17 @@ def build_monthly_close_rows(articles, movements, period_start, period_end):
         state["value"] += quantity * price
 
       if quantity:
+        if not used_fallback_price and price is not None and price > 0:
+          state["last_known_price"] = price
         estimate_status = movement.get("unit_price_estimated")
+        if used_fallback_price:
+          state["estimated"] = True
+          if in_period:
+            state["entries_estimated"] = True
+          add_issue(
+              state,
+              "Prix d'entrée absent ; valorisation estimée au dernier prix connu.",
+          )
         if estimate_status is True:
           state["estimated"] = True
           if in_period:
@@ -1998,6 +2076,8 @@ def build_monthly_close_rows(articles, movements, period_start, period_end):
             )
           if in_period:
             state["entries_estimated"] = True
+        if used_fallback_price:
+          state["estimate_status_unknown"] = True
     elif quantity:
       previous_quantity = state["quantity"]
       if in_period:
@@ -2043,12 +2123,27 @@ def build_monthly_close_rows(articles, movements, period_start, period_end):
     if state["closing"] is None:
       state["closing"] = snapshot(state)
 
-    if state["quantity"] != state["article"]["current_quantity"]:
+    if (
+        state["quantity_known"]
+        and state["quantity"] != state["article"]["current_quantity"]
+    ):
+      state["quantity_known"] = False
       state["opening"]["quantity"] = None
       state["opening"]["value"] = None
       state["closing"]["quantity"] = None
       state["closing"]["value"] = None
-      add_issue(state, "Le solde du journal ne correspond pas au stock actuel.")
+      add_issue(
+          state,
+          "Le stock actuel a changé pendant la reconstitution de l'historique.",
+      )
+
+    first_movement_date = state["first_movement_date"]
+    if (
+        state["baseline_quantity"] == 0
+        and first_movement_date is not None
+        and first_movement_date >= period_end
+    ):
+      continue
 
     opening = state["opening"]
     closing = state["closing"]
@@ -2467,18 +2562,57 @@ def monthly_close():
   cur = db.cursor()
   cur.execute("""
       SELECT a.id, a.name, a.reference, a.quantity AS current_quantity,
+             COALESCE(
+                 (
+                     SELECT m.unit_price
+                     FROM movements m
+                     WHERE m.article_id = a.id
+                       AND m.type = 'ENTREE'
+                       AND m.unit_price > 0
+                       AND m.date < %s
+                     ORDER BY m.date DESC, m.id DESC
+                     LIMIT 1
+                 ),
+                 NULLIF(a.price, 0)
+             ) AS fallback_price,
              l.name AS loc_name, e.name AS eq_name
       FROM articles a
       LEFT JOIN locations l ON l.id = a.location_id
       LEFT JOIN equipment e ON e.id = a.equipment_id
       ORDER BY COALESCE(l.name, 'Non assigné'), a.name
-  """)
+  """, (period_start,))
   articles = cur.fetchall()
   cur.execute(
       "SELECT COUNT(*) AS count FROM movements WHERE article_id IS NULL AND date < %s",
       (period_end,),
   )
   orphaned_movement_count = cur.fetchone()["count"]
+  cur.execute("""
+      SELECT article_id,
+             COALESCE(
+                 SUM(
+                     CASE
+                         WHEN type = 'ENTREE' THEN quantity
+                         WHEN type = 'SORTIE' THEN -quantity
+                         ELSE 0
+                     END
+                 ),
+                 0
+             ) AS net_quantity,
+             MIN(date) AS first_movement_date,
+             BOOL_OR(
+                 type NOT IN ('ENTREE', 'SORTIE')
+                 OR quantity < 0
+                 OR date IS NULL
+             ) AS has_invalid_movement
+      FROM movements
+      WHERE article_id IS NOT NULL
+        AND (date <= CURRENT_TIMESTAMP OR date IS NULL)
+      GROUP BY article_id
+  """)
+  movement_summaries = {
+      summary["article_id"]: summary for summary in cur.fetchall()
+  }
   cur.close()
 
   movement_cur = db.cursor(
@@ -2493,7 +2627,11 @@ def monthly_close():
       ORDER BY article_id, date, id
   """)
   monthly_close_rows, totals = build_monthly_close_rows(
-      articles, movement_cur, period_start, period_end
+      articles,
+      movement_cur,
+      movement_summaries,
+      period_start,
+      period_end,
   )
   movement_cur.close()
 
