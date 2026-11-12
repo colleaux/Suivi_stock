@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import warnings
+from decimal import Decimal, InvalidOperation
 
 import psycopg
 import qrcode
@@ -440,6 +441,7 @@ def init_db():
             type TEXT NOT NULL,
             quantity INTEGER NOT NULL,
             unit_price REAL,
+            unit_price_estimated BOOLEAN,
             supplier TEXT,
             invoice_number TEXT,
             reason TEXT,
@@ -506,6 +508,7 @@ def init_db():
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price REAL;
+        ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price_estimated BOOLEAN;
         CREATE INDEX IF NOT EXISTS idx_movements_date_id
             ON movements (date DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_movements_article_date_id
@@ -650,6 +653,9 @@ LAYOUT_HEADER = """
                     </a>
                     <a href="/movements" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'movements' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>🧾</span> Mouvements
+                    </a>
+                    <a href="/monthly-close" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'monthly_close' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                        <span>📅</span> Clôture mensuelle
                     </a>
                     <a href="/settings" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'settings' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>⚙️</span> Réglages
@@ -1399,6 +1405,156 @@ MOVEMENTS_TEMPLATE = (
     + LAYOUT_FOOTER
 )
 
+# --- MONTHLY STOCK CLOSING TEMPLATE ---
+MONTHLY_CLOSE_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <style>
+        .closing-table { min-width: 1050px; }
+        @media print {
+            @page { size: landscape; margin: 12mm; }
+            .closing-table { min-width: 0 !important; font-size: 8pt !important; }
+            .closing-table th, .closing-table td { padding: 4px !important; }
+            .closing-table thead { display: table-header-group; }
+            .closing-table tr { break-inside: avoid; }
+            .closing-section { break-inside: avoid; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+    </style>
+    <div class="mx-auto max-w-7xl space-y-5">
+        <section class="rounded-xl bg-forest p-5 text-white shadow-sm sm:p-6">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Contrôle de gestion · Inventaire</p>
+                    <h1 class="mt-1 text-2xl font-extrabold">État mensuel des stocks</h1>
+                    <p class="mt-2 text-sm text-emerald-100">Période : {{ period_label }} · du {{ period_start_label }} au {{ period_end_label }}</p>
+                    {% if current_month %}<p class="mt-2 inline-flex rounded bg-amber-300 px-2 py-1 text-xs font-bold text-amber-950">Période en cours · état provisoire</p>{% endif %}
+                </div>
+                <div class="no-print flex flex-wrap gap-2">
+                    <form method="GET" action="{{ url_for('monthly_close') }}" class="flex items-center gap-2">
+                        <label for="closing-month" class="sr-only">Mois à clôturer</label>
+                        <input id="closing-month" type="month" name="month" value="{{ month_key }}" max="{{ current_month_key }}" required class="min-h-11 rounded border border-white/30 bg-white px-3 text-sm text-slate-900">
+                        <button type="submit" class="min-h-11 rounded bg-emerald-500 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-600">Afficher</button>
+                    </form>
+                    <button type="button" onclick="window.print()" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Imprimer / PDF</button>
+                </div>
+            </div>
+            <p class="mt-4 rounded-lg border border-emerald-700 bg-emerald-950/40 p-3 text-xs leading-relaxed text-emerald-100">
+                Méthode : CUMP mobile reconstitué à partir des mouvements enregistrés, sans arrondi intermédiaire.
+                Les sorties sont valorisées au coût moyen pondéré avant sortie. Une histoire de stock ou de prix incomplète
+                est signalée dans le détail ; les montants présentés ne remplacent pas une validation comptable.
+            </p>
+            <p class="mt-2 text-right text-[11px] text-emerald-200">Édité le {{ generated_at }}</p>
+        </section>
+
+        {% if unverified_count or unvalued_count or legacy_price_status_count or estimated_count or orphaned_movement_count %}
+        <section class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="alert">
+            <h2 class="font-bold">Points de contrôle avant validation</h2>
+            <ul class="mt-1 list-inside list-disc space-y-1">
+                {% if unverified_count %}<li>{{ unverified_count }} article(s) ont un historique de quantité incomplet ou différent du stock actuel ; leurs soldes sont marqués « À vérifier ».</li>{% endif %}
+                {% if unvalued_count %}<li>{{ unvalued_count }} article(s) en stock n’ont pas de coût d’entrée exploitable pour calculer leur CUMP.</li>{% endif %}
+                {% if legacy_price_status_count %}<li>Le caractère estimatif de prix d’entrée anciens n’est pas historisé pour {{ legacy_price_status_count }} article(s) ; vérifiez les justificatifs d’achat.</li>{% endif %}
+                {% if estimated_count %}<li>{{ estimated_count }} article(s) ont un coût d’entrée estimatif ou un statut de prix historique incomplet.</li>{% endif %}
+                {% if orphaned_movement_count %}<li>{{ orphaned_movement_count }} mouvement(s) antérieur(s) à la clôture concernent des articles supprimés et ne peuvent pas être ventilés ; les synthèses sont incomplètes.</li>{% endif %}
+            </ul>
+        </section>
+        {% endif %}
+
+        <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <p class="text-xs font-semibold uppercase text-slate-500">Stock d’ouverture · CUMP</p>
+                <p class="mt-1 text-xl font-extrabold text-slate-900">{{ "%.2f"|format(opening_value) }} €</p>
+                {% if opening_unvalued_count or unverified_count or orphaned_movement_count %}<p class="mt-1 text-xs text-amber-800">Partiel · {{ opening_unvalued_count }} non valorisé(s), {{ unverified_count }} à vérifier</p>{% endif %}
+            </div>
+            <div class="rounded-lg border border-emerald-200 bg-white p-4 shadow-sm">
+                <p class="text-xs font-semibold uppercase text-slate-500">Entrées du mois</p>
+                <p class="mt-1 text-xl font-extrabold text-emerald-900">{{ "%.2f"|format(entries_value) }} €</p>
+                <p class="mt-1 text-xs text-slate-600">{{ entries_quantity }} unité(s){% if entries_unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
+            </div>
+            <div class="rounded-lg border border-amber-200 bg-white p-4 shadow-sm">
+                <p class="text-xs font-semibold uppercase text-slate-500">Sorties du mois · CUMP</p>
+                <p class="mt-1 text-xl font-extrabold text-amber-900">{{ "%.2f"|format(exits_value) }} €</p>
+                <p class="mt-1 text-xs text-slate-600">{{ exits_quantity }} unité(s){% if exits_unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
+            </div>
+            <div class="rounded-lg border border-forest bg-white p-4 shadow-sm">
+                <p class="text-xs font-semibold uppercase text-slate-500">Stock de clôture · CUMP</p>
+                <p class="mt-1 text-xl font-extrabold text-forest">{{ "%.2f"|format(closing_value) }} €</p>
+                <p class="mt-1 text-xs text-slate-600">{{ closing_quantity }} unité(s){% if unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
+            </div>
+        </section>
+
+        <section class="closing-section overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex flex-col gap-1 border-b border-slate-200 p-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h2 class="font-bold text-slate-900">Détail par article</h2>
+                    <p class="text-xs text-slate-600">{{ monthly_close_rows|length }} article(s) · Soldes issus du journal jusqu’à la fin de période</p>
+                </div>
+                <p class="text-xs text-slate-500">Les lignes « Estimé » ou « À vérifier » nécessitent un contrôle manuel.</p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="closing-table w-full border-collapse text-left text-xs">
+                    <thead class="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
+                        <tr>
+                            <th class="p-2">Statut</th>
+                            <th class="p-2">Référence</th>
+                            <th class="p-2">Article</th>
+                            <th class="p-2">Emplacement / équipement</th>
+                            <th class="p-2 text-right">Ouverture Qté</th>
+                            <th class="p-2 text-right">Entrées Qté</th>
+                            <th class="p-2 text-right">Entrées €</th>
+                            <th class="p-2 text-right">Sorties Qté</th>
+                            <th class="p-2 text-right">Sorties €</th>
+                            <th class="p-2 text-right">Clôture Qté</th>
+                            <th class="p-2 text-right">CUMP clôture</th>
+                            <th class="p-2 text-right">Valeur clôture</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for item in monthly_close_rows %}
+                        <tr class="{% if item.status == 'À vérifier' %}bg-rose-50{% elif item.status != 'OK' %}bg-amber-50{% else %}hover:bg-slate-50{% endif %}">
+                            <td class="whitespace-nowrap p-2 font-semibold {% if item.status == 'À vérifier' %}text-rose-800{% elif item.status != 'OK' %}text-amber-800{% else %}text-emerald-800{% endif %}">{{ item.status }}</td>
+                            <td class="p-2 font-mono">{{ item.reference or '—' }}</td>
+                            <td class="p-2 font-semibold text-slate-900">{{ item.name }}{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
+                            <td class="p-2">{{ item.location_name }}{% if item.equipment_name %}<span class="block text-slate-500">{{ item.equipment_name }}</span>{% endif %}</td>
+                            <td class="p-2 text-right">{{ item.opening_quantity if item.opening_quantity is not none else 'À vérifier' }}</td>
+                            <td class="p-2 text-right">{{ item.entries_quantity }}</td>
+                            <td class="whitespace-nowrap p-2 text-right">{% if item.entries_value is not none %}{{ "%.2f"|format(item.entries_value) }} €{% else %}—{% endif %}</td>
+                            <td class="p-2 text-right">{{ item.exits_quantity }}</td>
+                            <td class="whitespace-nowrap p-2 text-right">{% if item.exits_value is not none %}{{ "%.2f"|format(item.exits_value) }} €{% else %}—{% endif %}</td>
+                            <td class="p-2 text-right font-bold">{{ item.closing_quantity if item.closing_quantity is not none else 'À vérifier' }}</td>
+                            <td class="whitespace-nowrap p-2 text-right">{% if item.closing_cump is not none %}{{ "%.2f"|format(item.closing_cump) }} €{% else %}—{% endif %}</td>
+                            <td class="whitespace-nowrap p-2 text-right font-bold">{% if item.closing_value is not none %}{{ "%.2f"|format(item.closing_value) }} €{% else %}—{% endif %}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="12" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-900">
+                        <tr>
+                            <td colspan="4" class="p-2">Totaux des lignes vérifiées / valorisables</td>
+                            <td class="p-2 text-right">{{ opening_quantity }}</td>
+                            <td class="p-2 text-right">{{ entries_quantity }}</td>
+                            <td class="p-2 text-right">{{ "%.2f"|format(entries_value) }} €</td>
+                            <td class="p-2 text-right">{{ exits_quantity }}</td>
+                            <td class="p-2 text-right">{{ "%.2f"|format(exits_value) }} €</td>
+                            <td class="p-2 text-right">{{ closing_quantity }}</td>
+                            <td class="p-2"></td>
+                            <td class="p-2 text-right">{{ "%.2f"|format(closing_value) }} €</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </section>
+        <p class="text-[11px] leading-relaxed text-slate-500">
+            Contrôle : les soldes sont reconstitués à partir des mouvements, en supposant un stock initial nul avant le premier mouvement enregistré.
+            Le statut « À vérifier » signale notamment un mouvement de sortie sans solde antérieur documenté ou un écart avec le stock actuel.
+            Les anciens prix estimatifs ne sont pas toujours identifiables. Les prix proviennent d’un type numérique flottant et les montants sont arrondis à deux décimales à l’affichage ; vérifiez les justificatifs et la règle de valorisation comptable avant validation.
+        </p>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
+
 # --- EDIT ARTICLE TEMPLATE ---
 EDIT_ARTICLE_TEMPLATE = (
     LAYOUT_HEADER
@@ -1704,6 +1860,321 @@ def calculate_total_stock_value():
   return total
 
 
+def build_monthly_close_rows(articles, movements, period_start, period_end):
+  states = {}
+  for article in articles:
+    states[article["id"]] = {
+        "article": article,
+        "quantity": 0,
+        "value": Decimal("0"),
+        "quantity_known": True,
+        "value_known": True,
+        "estimated": False,
+        "estimate_status_unknown": False,
+        "legacy_price_status_seen": False,
+        "has_movement": False,
+        "opening": None,
+        "closing": None,
+        "entries_quantity": 0,
+        "entries_value": Decimal("0"),
+        "entries_value_known": True,
+        "entries_estimated": False,
+        "exits_quantity": 0,
+        "exits_value": Decimal("0"),
+        "exits_value_known": True,
+        "exits_estimated": False,
+        "issues": [],
+    }
+
+  def add_issue(state, message):
+    if message not in state["issues"]:
+      state["issues"].append(message)
+
+  def snapshot(state):
+    quantity = state["quantity"] if state["quantity_known"] else None
+    value = None
+    if quantity is not None:
+      if not quantity:
+        value = Decimal("0")
+      elif state["value_known"]:
+        value = state["value"]
+    return {
+        "quantity": quantity,
+        "value": value,
+        "estimated": state["estimated"],
+        "estimate_status_unknown": state["estimate_status_unknown"],
+    }
+
+  for movement in movements:
+    state = states.get(movement["article_id"])
+    if state is None:
+      continue
+    movement_date = movement["date"]
+    if movement_date is None:
+      state["quantity_known"] = False
+      state["value_known"] = False
+      add_issue(state, "Date de mouvement manquante dans l'historique.")
+      continue
+    if isinstance(movement_date, datetime.date) and not isinstance(
+        movement_date, datetime.datetime
+    ):
+      movement_date = datetime.datetime.combine(
+          movement_date, datetime.time.min
+      )
+
+    if state["opening"] is None and movement_date >= period_start:
+      state["opening"] = snapshot(state)
+    if state["closing"] is None and movement_date >= period_end:
+      if state["opening"] is None:
+        state["opening"] = snapshot(state)
+      state["closing"] = snapshot(state)
+
+    in_period = period_start <= movement_date < period_end
+    movement_type = movement["type"]
+    quantity = movement["quantity"]
+    if not isinstance(quantity, int) or quantity < 0:
+      state["quantity_known"] = False
+      state["value_known"] = False
+      if movement_date < period_end:
+        add_issue(state, "Quantité de mouvement invalide.")
+      state["has_movement"] = True
+      continue
+
+    if movement_type not in {"ENTREE", "SORTIE"}:
+      state["quantity_known"] = False
+      state["value_known"] = False
+      if movement_date < period_end:
+        add_issue(state, "Type de mouvement non reconnu.")
+      state["has_movement"] = True
+      continue
+
+    if (
+        movement_type == "SORTIE"
+        and quantity > 0
+        and not state["has_movement"]
+    ):
+      state["quantity_known"] = False
+      state["value_known"] = False
+      if movement_date < period_end:
+        add_issue(state, "Première opération = sortie ; le stock initial n'est pas documenté.")
+
+    if movement_type == "ENTREE":
+      price = None
+      try:
+        price = Decimal(str(movement["unit_price"]))
+      except (InvalidOperation, TypeError, ValueError):
+        pass
+      if price is not None and (not price.is_finite() or price < 0):
+        price = None
+
+      if in_period:
+        state["entries_quantity"] += quantity
+        if quantity and price is None:
+          state["entries_value_known"] = False
+        elif price is not None:
+          state["entries_value"] += quantity * price
+
+      if quantity and price is None:
+        state["value_known"] = False
+        if movement_date < period_end:
+          add_issue(state, "Prix d'entrée absent ou invalide dans l'historique.")
+      elif quantity and state["value_known"]:
+        state["value"] += quantity * price
+
+      if quantity:
+        estimate_status = movement.get("unit_price_estimated")
+        if estimate_status is True:
+          state["estimated"] = True
+          if in_period:
+            state["entries_estimated"] = True
+        elif estimate_status is None:
+          state["estimate_status_unknown"] = True
+          if movement_date < period_end:
+            state["legacy_price_status_seen"] = True
+          if movement_date < period_end:
+            add_issue(
+                state,
+                "Caractère estimatif d'un prix d'entrée ancien non historisé.",
+            )
+          if in_period:
+            state["entries_estimated"] = True
+    elif quantity:
+      previous_quantity = state["quantity"]
+      if in_period:
+        state["exits_quantity"] += quantity
+        if (
+            previous_quantity < quantity
+            or not state["quantity_known"]
+            or not state["value_known"]
+        ):
+          state["exits_value_known"] = False
+        elif previous_quantity:
+          state["exits_value"] += (
+              state["value"] * quantity / previous_quantity
+          )
+        if state["estimated"] or state["estimate_status_unknown"]:
+          state["exits_estimated"] = True
+
+      if quantity > previous_quantity or previous_quantity <= 0:
+        state["quantity_known"] = False
+        state["value_known"] = False
+        if movement_date < period_end:
+          add_issue(state, "Sortie supérieure au solde reconstitué.")
+      elif quantity == previous_quantity:
+        state["value"] = Decimal("0")
+        state["value_known"] = True
+        state["estimated"] = False
+        state["estimate_status_unknown"] = False
+      elif state["value_known"]:
+        state["value"] -= state["value"] * quantity / previous_quantity
+
+    state["quantity"] += quantity if movement_type == "ENTREE" else -quantity
+    if state["quantity"] < 0:
+      state["quantity_known"] = False
+      state["value_known"] = False
+      if movement_date < period_end:
+        add_issue(state, "Solde négatif dans l'historique.")
+    state["has_movement"] = True
+
+  rows = []
+  for article_id, state in states.items():
+    if state["opening"] is None:
+      state["opening"] = snapshot(state)
+    if state["closing"] is None:
+      state["closing"] = snapshot(state)
+
+    if state["quantity"] != state["article"]["current_quantity"]:
+      state["opening"]["quantity"] = None
+      state["opening"]["value"] = None
+      state["closing"]["quantity"] = None
+      state["closing"]["value"] = None
+      add_issue(state, "Le solde du journal ne correspond pas au stock actuel.")
+
+    opening = state["opening"]
+    closing = state["closing"]
+    verified = opening["quantity"] is not None and closing["quantity"] is not None
+    if not verified:
+      status = "À vérifier"
+    elif closing["quantity"] and closing["value"] is None:
+      status = "Non valorisable"
+    elif (
+        closing["estimated"]
+        or state["entries_estimated"]
+        or state["exits_estimated"]
+    ):
+      status = "Estimé"
+    elif closing["estimate_status_unknown"]:
+      status = "Prix historique à contrôler"
+    else:
+      status = "OK"
+
+    closing_cump = None
+    if closing["quantity"] is not None and closing["value"] is not None:
+      closing_cump = (
+          closing["value"] / closing["quantity"]
+          if closing["quantity"]
+          else Decimal("0")
+      )
+
+    location_name = article.get("loc_name") or "Non assigné"
+    rows.append(
+        {
+            "id": article_id,
+            "reference": article.get("reference"),
+            "name": article["name"],
+            "location_name": location_name,
+            "equipment_name": article.get("eq_name"),
+            "opening_quantity": opening["quantity"],
+            "opening_value": opening["value"],
+            "entries_quantity": state["entries_quantity"],
+            "entries_value": (
+                state["entries_value"]
+                if state["entries_value_known"]
+                else None
+            ),
+            "entries_estimated": state["entries_estimated"],
+            "exits_quantity": state["exits_quantity"],
+            "exits_value": (
+                state["exits_value"] if state["exits_value_known"] else None
+            ),
+            "exits_estimated": state["exits_estimated"],
+            "closing_quantity": closing["quantity"],
+            "closing_cump": closing_cump,
+            "closing_value": closing["value"],
+            "closing_estimated": closing["estimated"],
+            "closing_estimate_status_unknown": closing[
+                "estimate_status_unknown"
+            ],
+            "contains_estimated_cost": (
+                closing["estimated"]
+                or state["entries_estimated"]
+                or state["exits_estimated"]
+            ),
+            "quantity_verified": verified,
+            "status": status,
+            "issues": " ".join(state["issues"]),
+            "has_legacy_price_status_unknown": state[
+                "legacy_price_status_seen"
+            ],
+        }
+    )
+
+  rows.sort(key=lambda row: (row["location_name"].casefold(), row["name"].casefold()))
+  totals = {
+      "opening_quantity": 0,
+      "opening_value": Decimal("0"),
+      "opening_unvalued_count": 0,
+      "entries_quantity": 0,
+      "entries_value": Decimal("0"),
+      "entries_unvalued_count": 0,
+      "exits_quantity": 0,
+      "exits_value": Decimal("0"),
+      "exits_unvalued_count": 0,
+      "closing_quantity": 0,
+      "closing_value": Decimal("0"),
+      "unverified_count": 0,
+      "unvalued_count": 0,
+      "legacy_price_status_count": 0,
+      "estimated_count": 0,
+  }
+  for row in rows:
+    if not row["quantity_verified"]:
+      totals["unverified_count"] += 1
+      continue
+
+    totals["opening_quantity"] += row["opening_quantity"]
+    totals["entries_quantity"] += row["entries_quantity"]
+    totals["exits_quantity"] += row["exits_quantity"]
+    totals["closing_quantity"] += row["closing_quantity"]
+
+    if row["opening_value"] is not None:
+      totals["opening_value"] += row["opening_value"]
+    elif row["opening_quantity"]:
+      totals["opening_unvalued_count"] += 1
+
+    if row["entries_value"] is not None:
+      totals["entries_value"] += row["entries_value"]
+    elif row["entries_quantity"]:
+      totals["entries_unvalued_count"] += 1
+
+    if row["exits_value"] is not None:
+      totals["exits_value"] += row["exits_value"]
+    elif row["exits_quantity"]:
+      totals["exits_unvalued_count"] += 1
+
+    if row["closing_value"] is not None:
+      totals["closing_value"] += row["closing_value"]
+    elif row["closing_quantity"]:
+      totals["unvalued_count"] += 1
+
+    if row["has_legacy_price_status_unknown"]:
+      totals["legacy_price_status_count"] += 1
+    if row["contains_estimated_cost"]:
+      totals["estimated_count"] += 1
+
+  return rows, totals
+
+
 @app.route("/")
 def home():
   return redirect(url_for("stock_view"))
@@ -1958,6 +2429,91 @@ def movement_report():
   )
 
 
+@app.route("/monthly-close")
+def monthly_close():
+  today = datetime.date.today()
+  current_month_start = today.replace(day=1)
+  current_month_key = current_month_start.strftime("%Y-%m")
+  previous_month = current_month_start - datetime.timedelta(days=1)
+  month_key = request.args.get(
+      "month", previous_month.replace(day=1).strftime("%Y-%m")
+  )
+  if not re.fullmatch(r"\d{4}-\d{2}", month_key):
+    abort(400, description="Le mois demandé est invalide.")
+  try:
+    month_start_date = datetime.date.fromisoformat(f"{month_key}-01")
+  except ValueError:
+    abort(400, description="Le mois demandé est invalide.")
+  if month_start_date > current_month_start:
+    abort(400, description="La clôture ne peut pas porter sur un mois futur.")
+
+  if month_start_date.month == 12:
+    next_month_date = datetime.date(month_start_date.year + 1, 1, 1)
+  else:
+    next_month_date = datetime.date(
+        month_start_date.year, month_start_date.month + 1, 1
+    )
+  period_start = datetime.datetime.combine(
+      month_start_date, datetime.time.min
+  )
+  period_end = datetime.datetime.combine(next_month_date, datetime.time.min)
+  month_names = (
+      "janvier", "février", "mars", "avril", "mai", "juin",
+      "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+  )
+  period_label = f"{month_names[month_start_date.month - 1]} {month_start_date.year}"
+  period_end_date = next_month_date - datetime.timedelta(days=1)
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("""
+      SELECT a.id, a.name, a.reference, a.quantity AS current_quantity,
+             l.name AS loc_name, e.name AS eq_name
+      FROM articles a
+      LEFT JOIN locations l ON l.id = a.location_id
+      LEFT JOIN equipment e ON e.id = a.equipment_id
+      ORDER BY COALESCE(l.name, 'Non assigné'), a.name
+  """)
+  articles = cur.fetchall()
+  cur.execute(
+      "SELECT COUNT(*) AS count FROM movements WHERE article_id IS NULL AND date < %s",
+      (period_end,),
+  )
+  orphaned_movement_count = cur.fetchone()["count"]
+  cur.close()
+
+  movement_cur = db.cursor(
+      name=f"monthly_close_{secrets.token_hex(8)}"
+  )
+  movement_cur.itersize = 1000
+  movement_cur.execute("""
+      SELECT article_id, type, quantity, unit_price,
+             unit_price_estimated, date
+      FROM movements
+      WHERE article_id IS NOT NULL AND date <= CURRENT_TIMESTAMP
+      ORDER BY article_id, date, id
+  """)
+  monthly_close_rows, totals = build_monthly_close_rows(
+      articles, movement_cur, period_start, period_end
+  )
+  movement_cur.close()
+
+  return render_template_string(
+      MONTHLY_CLOSE_TEMPLATE,
+      active_page="monthly_close",
+      total_stock_value=calculate_total_stock_value(),
+      monthly_close_rows=monthly_close_rows,
+      month_key=month_key,
+      current_month_key=current_month_key,
+      period_label=period_label,
+      period_start_label=month_start_date.strftime("%d/%m/%Y"),
+      period_end_label=period_end_date.strftime("%d/%m/%Y"),
+      generated_at=datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
+      current_month=month_start_date == current_month_start,
+      orphaned_movement_count=orphaned_movement_count,
+      **totals,
+  )
+
+
 @app.route("/edit/<int:id>", methods=["GET", "POST"])
 def edit_article(id):
   db = get_db()
@@ -2017,14 +2573,16 @@ def edit_article(id):
     if quantity_delta:
       cur.execute(
           """
-              INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
-              VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+              INSERT INTO movements
+                  (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
+              VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
           """,
           (
               id,
               "ENTREE" if quantity_delta > 0 else "SORTIE",
               abs(quantity_delta),
               price,
+              bool(is_estimated_price),
               "Correction de stock via modification de l'article",
           ),
       )
@@ -2312,10 +2870,15 @@ def add_article():
 
   cur.execute(
       """
-        INSERT INTO movements (article_id, type, quantity, unit_price, supplier, invoice_number, reason, date) 
-        VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO movements
+            (article_id, type, quantity, unit_price, unit_price_estimated,
+             supplier, invoice_number, reason, date)
+        VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
     """,
-      (article_id, quantity, price, supplier, invoice_number, reason),
+      (
+          article_id, quantity, price, bool(is_estimated_price),
+          supplier, invoice_number, reason,
+      ),
   )
   db.commit()
   cur.close()
@@ -2354,8 +2917,9 @@ def movement_entry():
   cur.execute(
       """
           INSERT INTO movements
-              (article_id, type, quantity, unit_price, supplier, invoice_number, reason, date)
-          VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+              (article_id, type, quantity, unit_price, unit_price_estimated,
+               supplier, invoice_number, reason, date)
+          VALUES (%s, 'ENTREE', %s, %s, FALSE, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
       (article_id, qty, price, supplier, invoice_number, reason),
   )
@@ -2378,7 +2942,7 @@ def movement_exit():
       """
           UPDATE articles SET quantity = quantity - %s
           WHERE id = %s AND quantity >= %s
-          RETURNING id, price
+          RETURNING id, price, is_estimated_price
       """,
       (qty, article_id, qty),
   )
@@ -2388,10 +2952,17 @@ def movement_exit():
     abort(400, description="Article inexistant ou stock insuffisant.")
   cur.execute(
       """
-          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
-          VALUES (%s, 'SORTIE', %s, %s, %s, CURRENT_TIMESTAMP)
+          INSERT INTO movements
+              (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
+          VALUES (%s, 'SORTIE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
-      (article_id, qty, article["price"] or 0.0, reason),
+      (
+          article_id,
+          qty,
+          article["price"] or 0.0,
+          bool(article["is_estimated_price"]),
+          reason,
+      ),
   )
   db.commit()
   cur.close()
@@ -2406,7 +2977,10 @@ def update_quantity(id):
   action = request.form.get("action")
   if action not in {"plus", "minus"}:
     abort(400, description="Action de mise à jour invalide.")
-  cur.execute("SELECT quantity, price FROM articles WHERE id = %s FOR UPDATE", (id,))
+  cur.execute(
+      "SELECT quantity, price, is_estimated_price FROM articles WHERE id = %s FOR UPDATE",
+      (id,),
+  )
   item = cur.fetchone()
   if item is None:
     abort(404)
@@ -2417,13 +2991,15 @@ def update_quantity(id):
   cur.execute("UPDATE articles SET quantity = quantity + %s WHERE id = %s", (delta, id))
   cur.execute(
       """
-          INSERT INTO movements (article_id, type, quantity, unit_price, reason, date)
-          VALUES (%s, %s, 1, %s, %s, CURRENT_TIMESTAMP)
+          INSERT INTO movements
+              (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
+          VALUES (%s, %s, 1, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
       (
           id,
           "ENTREE" if delta > 0 else "SORTIE",
           item["price"] or 0.0,
+          bool(item["is_estimated_price"]),
           "Ajustement manuel du stock",
       ),
   )
