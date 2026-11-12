@@ -1448,7 +1448,7 @@ MONTHLY_CLOSE_TEMPLATE = (
             <p class="mt-2 text-right text-[11px] text-emerald-200">Édité le {{ generated_at }}</p>
         </section>
 
-        {% if unverified_count or unvalued_count or legacy_price_status_count or estimated_count or orphaned_movement_count %}
+        {% if unverified_count or unvalued_count or legacy_price_status_count or estimated_count or orphaned_movement_count or unassigned_location_count or unassigned_equipment_count or duplicate_name_count %}
         <section class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="alert">
             <h2 class="font-bold">Points de contrôle avant validation</h2>
             <ul class="mt-1 list-inside list-disc space-y-1">
@@ -1457,7 +1457,11 @@ MONTHLY_CLOSE_TEMPLATE = (
                 {% if legacy_price_status_count %}<li>Le statut estimatif d’anciens prix n’est pas historisé pour {{ legacy_price_status_count }} article(s) ; ces prix et soldes d’ouverture sont donc estimés.</li>{% endif %}
                 {% if estimated_count %}<li>{{ estimated_count }} article(s) ont un coût d’entrée estimatif ou un statut de prix historique incomplet.</li>{% endif %}
                 {% if orphaned_movement_count %}<li>{{ orphaned_movement_count }} mouvement(s) antérieur(s) à la clôture concernent des articles supprimés et ne peuvent pas être ventilés ; les synthèses sont incomplètes.</li>{% endif %}
+                {% if duplicate_name_count %}<li>{{ duplicate_name_count }} désignation(s) sont utilisées par plusieurs fiches. Chaque ligne reste séparée par identifiant (ID) ; aucune fusion automatique n’est faite, car chaque fiche a son propre historique.</li>{% endif %}
+                {% if unassigned_location_count %}<li>{{ unassigned_location_count }} fiche(s) n’ont pas d’emplacement renseigné, directement ou via leur équipement.</li>{% endif %}
+                {% if unassigned_equipment_count %}<li>{{ unassigned_equipment_count }} fiche(s) n’ont pas d’équipement associé. Vérifiez la configuration si cette information est requise.</li>{% endif %}
             </ul>
+            {% if unassigned_location_count or unassigned_equipment_count %}<a href="{{ url_for('settings_view') }}" class="mt-2 inline-block font-semibold text-amber-900 underline no-print">Vérifier les emplacements et équipements dans Réglages</a>{% endif %}
         </section>
         {% endif %}
 
@@ -1497,7 +1501,7 @@ MONTHLY_CLOSE_TEMPLATE = (
                     <thead class="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
                         <tr>
                             <th class="p-2">Statut</th>
-                            <th class="p-2">Référence / ID</th>
+                            <th class="p-2">Référence</th>
                             <th class="p-2">Article</th>
                             <th class="p-2">Emplacement / équipement</th>
                             <th class="p-2 text-right">Ouverture Qté</th>
@@ -1515,9 +1519,9 @@ MONTHLY_CLOSE_TEMPLATE = (
                         {% for item in monthly_close_rows %}
                         <tr class="{% if item.status == 'À vérifier' %}bg-rose-50{% elif item.status != 'OK' %}bg-amber-50{% else %}hover:bg-slate-50{% endif %}">
                             <td class="whitespace-nowrap p-2 font-semibold {% if item.status == 'À vérifier' %}text-rose-800{% elif item.status != 'OK' %}text-amber-800{% else %}text-emerald-800{% endif %}">{{ item.status }}</td>
-                            <td class="whitespace-nowrap p-2 font-mono">{{ item.reference or ('ID ' ~ item.id|string) }}</td>
-                            <td class="p-2 font-semibold text-slate-900">{{ item.name }}{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
-                            <td class="p-2">{{ item.location_name }}{% if item.equipment_name %}<span class="block text-slate-500">{{ item.equipment_name }}</span>{% endif %}</td>
+                            <td class="whitespace-nowrap p-2 font-mono">{{ item.reference or '—' }}</td>
+                            <td class="p-2 font-semibold text-slate-900">{{ item.name }}<span class="ml-1 whitespace-nowrap text-[10px] font-normal text-slate-500">(ID {{ item.id }})</span>{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
+                            <td class="p-2">{{ item.location_name }}<span class="block text-slate-500">{{ item.equipment_name or 'Équipement non renseigné' }}</span></td>
                             <td class="p-2 text-right">{{ item.opening_quantity if item.opening_quantity is not none else 'À vérifier' }}</td>
                             <td class="whitespace-nowrap p-2 text-right">{% if item.opening_value is not none %}{{ "%.2f"|format(item.opening_value) }} €{% else %}—{% endif %}</td>
                             <td class="p-2 text-right">{{ item.entries_quantity }}</td>
@@ -2118,6 +2122,7 @@ def build_monthly_close_rows(
 
   rows = []
   for article_id, state in states.items():
+    article = state["article"]
     if state["opening"] is None:
       state["opening"] = snapshot(state)
     if state["closing"] is None:
@@ -2231,8 +2236,14 @@ def build_monthly_close_rows(
       "unvalued_count": 0,
       "legacy_price_status_count": 0,
       "estimated_count": 0,
+      "unassigned_location_count": 0,
+      "unassigned_equipment_count": 0,
   }
   for row in rows:
+    if row["location_name"] == "Non assigné":
+      totals["unassigned_location_count"] += 1
+    if not row["equipment_name"]:
+      totals["unassigned_equipment_count"] += 1
     if not row["quantity_verified"]:
       totals["unverified_count"] += 1
       continue
@@ -2575,11 +2586,13 @@ def monthly_close():
                  ),
                  NULLIF(a.price, 0)
              ) AS fallback_price,
-             l.name AS loc_name, e.name AS eq_name
+             COALESCE(l.name, equipment_location.name) AS loc_name,
+             e.name AS eq_name
       FROM articles a
       LEFT JOIN locations l ON l.id = a.location_id
       LEFT JOIN equipment e ON e.id = a.equipment_id
-      ORDER BY COALESCE(l.name, 'Non assigné'), a.name
+      LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+      ORDER BY COALESCE(l.name, equipment_location.name, 'Non assigné'), a.name
   """, (period_start,))
   articles = cur.fetchall()
   cur.execute(
@@ -2634,6 +2647,15 @@ def monthly_close():
       period_end,
   )
   movement_cur.close()
+  article_name_counts = {}
+  for row in monthly_close_rows:
+    normalized_name = row["name"].strip().casefold()
+    article_name_counts[normalized_name] = (
+        article_name_counts.get(normalized_name, 0) + 1
+    )
+  duplicate_name_count = sum(
+      count > 1 for count in article_name_counts.values()
+  )
 
   return render_template_string(
       MONTHLY_CLOSE_TEMPLATE,
@@ -2648,6 +2670,7 @@ def monthly_close():
       generated_at=datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
       current_month=month_start_date == current_month_start,
       orphaned_movement_count=orphaned_movement_count,
+      duplicate_name_count=duplicate_name_count,
       **totals,
   )
 
