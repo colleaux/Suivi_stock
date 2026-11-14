@@ -595,17 +595,36 @@ LAYOUT_HEADER = """
             }
             .article-qr-code {
                 flex: none !important;
-                width: 36mm !important;
-                height: 36mm !important;
+                width: 30mm !important;
+                height: 30mm !important;
                 margin: 0 !important;
                 padding: 0 !important;
                 border: 0 !important;
             }
-            .article-qr-code img { width: 36mm !important; height: 36mm !important; }
-            .article-qr-details { min-width: 0; overflow-wrap: anywhere; }
-            .article-qr-details h2 { font-size: 12pt !important; line-height: 1.15 !important; }
-            .article-qr-details .article-reference { font-size: 9pt !important; }
-            .article-qr-details .qr-scan-hint { margin-top: 2mm !important; font-size: 7pt !important; }
+            .article-qr-code img { width: 30mm !important; height: 30mm !important; }
+            .article-qr-photo, .article-qr-photo-placeholder {
+                flex: none !important;
+                width: 23mm !important;
+                height: 30mm !important;
+                object-fit: contain !important;
+                background: white !important;
+            }
+            .article-qr-photo-placeholder {
+                display: flex !important;
+                align-items: center;
+                justify-content: center;
+                padding: 1mm;
+                border: 0.3mm solid #CBD5E1;
+                background: #F8FAFC;
+                color: #64748B;
+                font-size: 6pt;
+                text-align: center;
+            }
+            .article-qr-photo-placeholder[hidden] { display: none !important; }
+            .article-qr-details { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+            .article-qr-details h2 { font-size: 9pt !important; line-height: 1.15 !important; }
+            .article-qr-details .article-reference { font-size: 7pt !important; }
+            .article-qr-details .qr-scan-hint { margin-top: 2mm !important; font-size: 6pt !important; }
         }
         .bg-forest { background-color: #0b3d2c; }
         .bg-forest-light { background-color: #124e38; }
@@ -1021,7 +1040,7 @@ ENTRY_TEMPLATE = (
                                 ) {
                                     articleId = scannedId;
                                 }
-                            } catch (error) {
+                            } catch {
                                 articleId = null;
                             }
                         }
@@ -1111,6 +1130,9 @@ STOCK_TEMPLATE = (
                 <button onclick="window.print()" class="bg-forest-light hover:bg-emerald-900 text-xs font-semibold px-4 py-2 rounded border border-emerald-700 text-white transition">
                     🖨️ Imprimer / PDF
                 </button>
+                <a href="{{ url_for('stock_print_view', loc_filter=current_loc) if current_loc else url_for('stock_print_view') }}" class="bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold px-4 py-2 rounded border border-emerald-400 text-white transition">
+                    🏷️ Fiches par lieu (photo + QR)
+                </a>
             </div>
         </div>
 
@@ -1306,6 +1328,92 @@ STOCK_TEMPLATE = (
         })();
     </script>
     {% endif %}
+"""
+    + LAYOUT_FOOTER
+)
+
+# --- PRINTABLE STOCK LIST BY LOCATION ---
+PRINT_STOCK_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <style>
+        .location-print-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5mm; }
+        .location-print-card { display: grid; grid-template-columns: 31mm 31mm minmax(0, 1fr); align-items: center; gap: 3mm; min-height: 43mm; padding: 3mm; border: 0.3mm solid #CBD5E1; border-radius: 2mm; break-inside: avoid; page-break-inside: avoid; }
+        .location-print-photo, .location-print-qr { width: 30mm; height: 30mm; object-fit: contain; }
+        .location-print-photo { object-fit: cover; }
+        .location-print-placeholder { display: flex; width: 30mm; height: 30mm; align-items: center; justify-content: center; border: 0.3mm solid #E2E8F0; background: #F8FAFC; font-size: 8pt; color: #64748B; text-align: center; }
+        .location-print-details { min-width: 0; overflow-wrap: anywhere; }
+        .location-print-group { margin-bottom: 6mm; }
+        @media print {
+            @page { size: A4 landscape; margin: 9mm; }
+            .location-print-group { break-inside: auto; }
+            .location-print-heading { break-after: avoid; page-break-after: avoid; }
+            .location-print-card { box-shadow: none !important; background: white !important; }
+            .location-print-qr, .location-print-photo { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .location-print-grid { gap: 3mm; }
+        }
+        @media screen and (max-width: 800px) {
+            .location-print-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+    <div class="mx-auto max-w-7xl space-y-5">
+        <section class="no-print rounded-xl bg-forest p-5 text-white shadow-sm sm:p-6">
+            <p class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Support terrain · Inventaire</p>
+            <h1 class="mt-1 text-2xl font-extrabold">Fiches articles par lieu de stockage</h1>
+            <p class="mt-2 text-sm text-emerald-100">Chaque fiche présente la photo, le QR code, la désignation et le stock. Scannez le QR code pour choisir une entrée ou une sortie.</p>
+            <div class="mt-4 flex flex-wrap items-end gap-3">
+                <form method="GET" action="{{ url_for('stock_print_view') }}" class="flex flex-wrap items-end gap-2">
+                    <label class="text-xs font-semibold text-emerald-100">Lieu
+                        <select name="loc_filter" class="mt-1 min-h-11 rounded border border-slate-300 bg-white px-3 text-sm text-slate-900">
+                            <option value="">Tous les lieux</option>
+                            {% for location in locations %}
+                            <option value="{{ location.id }}" {% if current_location_id == location.id %}selected{% endif %}>{{ location.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <button type="submit" class="min-h-11 rounded bg-emerald-500 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-600">Filtrer</button>
+                </form>
+                <button type="button" onclick="window.print()" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Imprimer / PDF</button>
+                <a href="{{ url_for('stock_view') }}" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10">Retour au stock</a>
+            </div>
+            <p class="mt-3 text-xs text-emerald-200">{{ article_count }} article(s) · {{ grouped_articles|length }} lieu(x) · les articles sans emplacement sont regroupés sous « Non assigné ».</p>
+        </section>
+
+        {% for group in grouped_articles %}
+        <section class="location-print-group">
+            <header class="location-print-heading mb-3 flex items-end justify-between border-b-2 border-emerald-800 pb-2">
+                <div>
+                    <p class="text-[10px] font-bold uppercase tracking-widest text-emerald-800">Lieu de stockage</p>
+                    <h2 class="text-xl font-extrabold text-slate-900">{{ group.location_name }}</h2>
+                </div>
+                <span class="text-xs font-semibold text-slate-600">{{ group['items']|length }} article(s)</span>
+            </header>
+            <div class="location-print-grid">
+                {% for item in group['items'] %}
+                <article class="location-print-card bg-white shadow-sm">
+                    {% if item.image_filename %}
+                    <img class="location-print-photo rounded border border-slate-200" src="{{ url_for('uploaded_file', filename=item.image_filename) }}" alt="Photo de {{ item.name }}">
+                    {% else %}
+                    <div class="location-print-placeholder rounded">Photo non disponible</div>
+                    {% endif %}
+                    <img class="location-print-qr" src="{{ item.qr_code_data }}" alt="QR code pour entrée ou sortie de {{ item.name }}">
+                    <div class="location-print-details">
+                        <h3 class="text-sm font-extrabold leading-tight text-slate-900">{{ item.name }}</h3>
+                        <p class="mt-1 text-[10px] text-slate-600">Réf. : {{ item.reference or '—' }} · ID {{ item.id }}</p>
+                        <p class="mt-1 text-xs font-bold {% if item.quantity == 0 %}text-rose-800{% elif item.quantity < item.min_threshold %}text-amber-800{% else %}text-emerald-800{% endif %}">Stock : {{ item.quantity }} · Mini : {{ item.min_threshold }}</p>
+                        {% if item.equipment_name %}<p class="mt-1 text-[10px] text-slate-600">Équipement : {{ item.equipment_name }}</p>{% endif %}
+                        <p class="mt-2 text-[9px] font-semibold text-slate-500">Scanner → choisir Entrée ou Sortie</p>
+                    </div>
+                </article>
+                {% else %}
+                <p class="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">Aucun article dans ce lieu.</p>
+                {% endfor %}
+            </div>
+        </section>
+        {% else %}
+        <p class="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">Aucun article à imprimer.</p>
+        {% endfor %}
+    </div>
 """
     + LAYOUT_FOOTER
 )
@@ -1660,8 +1768,23 @@ EDIT_ARTICLE_TEMPLATE = (
         </div>
         <style>
             @page { size: 85mm 55mm; margin: 0; }
+            .article-qr-photo-placeholder {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0.5rem;
+                background: #F8FAFC;
+                color: #64748B;
+                text-align: center;
+            }
         </style>
         <section class="article-qr-card rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
+            {% if article.image_filename %}
+            <img src="{{ url_for('uploaded_file', filename=article.image_filename) }}" alt="Photo de {{ article.name }}" loading="eager" decoding="sync" class="article-qr-photo h-40 w-32 rounded object-contain bg-white" onerror="this.hidden = true; this.nextElementSibling.hidden = false">
+            <div class="article-qr-photo-placeholder h-40 w-32 rounded border border-slate-200 text-xs" hidden>Photo indisponible</div>
+            {% else %}
+            <div class="article-qr-photo-placeholder h-40 w-32 rounded border border-slate-200 text-xs">Photo à ajouter à l’article</div>
+            {% endif %}
             <div class="article-qr-code mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
                 <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
             </div>
@@ -1671,10 +1794,30 @@ EDIT_ARTICLE_TEMPLATE = (
                 <p class="qr-scan-hint mt-1 text-xs text-slate-500">Scanner pour entrée ou sortie</p>
             </div>
             <div class="mt-4 flex flex-col justify-center gap-2 sm:flex-row no-print">
-                <button type="button" onclick="window.print()" class="min-h-11 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-900">Imprimer le QR code</button>
+                <button type="button" onclick="printArticleQrLabel()" class="min-h-11 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-900">Imprimer l’étiquette avec photo</button>
                 <a href="{{ qr_code_data }}" download="qr-article-{{ article.id }}.png" class="flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Télécharger l’image</a>
             </div>
         </section>
+        <script>
+            async function printArticleQrLabel() {
+                const photo = document.querySelector(".article-qr-photo");
+                if (photo && !photo.complete) {
+                    await new Promise((resolve) => {
+                        photo.addEventListener("load", resolve, { once: true });
+                        photo.addEventListener("error", resolve, { once: true });
+                    });
+                }
+                if (photo && photo.naturalWidth > 0) {
+                    try {
+                        await photo.decode();
+                    } catch (error) {
+                        photo.hidden = true;
+                        photo.nextElementSibling.hidden = false;
+                    }
+                }
+                window.print();
+            }
+        </script>
     </div>
 """
     + LAYOUT_FOOTER
@@ -2283,7 +2426,59 @@ def build_monthly_close_rows(
 
 @app.route("/")
 def home():
-  return redirect(url_for("stock_view"))
+  return redirect(url_for("stock_view")  )
+
+
+@app.route("/stock/print")
+def stock_print_view():
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("SELECT id, name FROM locations ORDER BY name")
+  locations = cur.fetchall()
+  location_id = optional_integer(request.args.get("loc_filter"), "loc_filter")
+
+  query = """
+      SELECT a.*, COALESCE(l.name, equipment_location.name, 'Non assigné') AS loc_name,
+             e.name AS equipment_name
+      FROM articles a
+      LEFT JOIN locations l ON a.location_id = l.id
+      LEFT JOIN equipment e ON a.equipment_id = e.id
+      LEFT JOIN locations equipment_location ON e.location_id = equipment_location.id
+  """
+  params = []
+  if location_id:
+    query += " WHERE COALESCE(a.location_id, e.location_id) = %s"
+    params.append(location_id)
+  query += " ORDER BY loc_name ASC, a.name ASC, a.id ASC"
+  cur.execute(query, params)
+  articles = cur.fetchall()
+  cur.close()
+
+  grouped_dict = {}
+  for article in articles:
+    item = dict(article)
+    item["qr_code_data"] = article_qr_code_data(
+        APP_BASE_URL + url_for(
+            "entry_form", article_id=item["id"], mode="choose"
+        )
+    )
+    location_name = item["loc_name"]
+    if location_name not in grouped_dict:
+      grouped_dict[location_name] = []
+    grouped_dict[location_name].append(item)
+
+  grouped_articles = [
+      {"location_name": location_name, "items": items}
+      for location_name, items in grouped_dict.items()
+  ]
+  return render_template_string(
+      PRINT_STOCK_TEMPLATE,
+      active_page="stock",
+      locations=locations,
+      current_location_id=location_id,
+      grouped_articles=grouped_articles,
+      article_count=len(articles),
+  )
 
 
 @app.route("/entry")
@@ -2352,10 +2547,11 @@ def stock_view():
     abort(400, description="Filtre de disponibilité invalide.")
 
   query = """
-        SELECT a.*, COALESCE(l.name, 'Non assigné') as loc_name, e.name as eq_name 
+        SELECT a.*, COALESCE(l.name, equipment_location.name, 'Non assigné') as loc_name, e.name as eq_name 
         FROM articles a
         LEFT JOIN locations l ON a.location_id = l.id
         LEFT JOIN equipment e ON a.equipment_id = e.id
+        LEFT JOIN locations equipment_location ON e.location_id = equipment_location.id
         WHERE 1=1
     """
   params = []
@@ -2367,7 +2563,7 @@ def stock_view():
       query += " AND (a.name ILIKE %s OR COALESCE(a.reference, '') ILIKE %s)"
       params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
   if loc_filter:
-    query += " AND a.location_id = %s"
+    query += " AND COALESCE(a.location_id, e.location_id) = %s"
     params.append(loc_filter)
   if eq_filter:
     query += " AND a.equipment_id = %s"
