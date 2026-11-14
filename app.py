@@ -1768,22 +1768,10 @@ EDIT_ARTICLE_TEMPLATE = (
         </div>
         <style>
             @page { size: 85mm 55mm; margin: 0; }
-            .article-qr-photo-placeholder {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 0.5rem;
-                background: #F8FAFC;
-                color: #64748B;
-                text-align: center;
-            }
         </style>
         <section class="article-qr-card rounded-xl border border-slate-200 bg-white p-5 text-center shadow-sm">
             {% if article.image_filename %}
-            <img src="{{ url_for('uploaded_file', filename=article.image_filename) }}" alt="Photo de {{ article.name }}" loading="eager" decoding="sync" class="article-qr-photo h-40 w-32 rounded object-contain bg-white" onerror="this.hidden = true; this.nextElementSibling.hidden = false">
-            <div class="article-qr-photo-placeholder h-40 w-32 rounded border border-slate-200 text-xs" hidden>Photo indisponible</div>
-            {% else %}
-            <div class="article-qr-photo-placeholder h-40 w-32 rounded border border-slate-200 text-xs">Photo à ajouter à l’article</div>
+            <img src="{{ url_for('uploaded_file', filename=article.image_filename) }}" alt="Photo de {{ article.name }}" loading="eager" decoding="sync" class="article-qr-photo h-40 w-32 rounded object-contain bg-white" onerror="this.remove()">
             {% endif %}
             <div class="article-qr-code mx-auto mt-4 w-fit rounded-lg border border-slate-200 bg-white p-3">
                 <img src="{{ qr_code_data }}" alt="QR code de l’article {{ article.name }}" class="h-56 w-56">
