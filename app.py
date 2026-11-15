@@ -126,6 +126,47 @@ LOGIN_TEMPLATE = """
 </html>
 """
 
+SITE_SELECT_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b3d2c">
+    <title>Choisir un site - Suivi de stock</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 font-sans text-slate-800">
+    <main class="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-4 py-10 sm:px-8">
+        <div class="mb-8 text-center">
+            <p class="text-sm font-bold uppercase tracking-[0.18em] text-emerald-800">Suivi de stock</p>
+            <h1 class="mt-2 text-3xl font-extrabold text-slate-900">Choisissez votre site</h1>
+            <p class="mt-2 text-sm text-slate-600">Les stocks affichés et les mouvements seront ceux du site sélectionné.</p>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {% for site in sites %}
+            <form method="POST" class="m-0">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="site_id" value="{{ site.id }}">
+                <button type="submit" class="flex min-h-32 w-full items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                    <span class="text-xl font-extrabold text-slate-900">{{ site.name }}</span>
+                    <span class="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-900" aria-hidden="true">›</span>
+                </button>
+            </form>
+            {% else %}
+            <p class="col-span-full rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">Aucun site n’est configuré. Contactez l’administrateur.</p>
+            {% endfor %}
+        </div>
+        <form action="{{ url_for('logout') }}" method="POST" class="mt-8 text-center">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="min-h-11 rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200">Se déconnecter</button>
+        </form>
+    </main>
+</body>
+</html>
+"""
+
+
 def allowed_file(filename):
   return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -339,6 +380,36 @@ def protect_requests():
     if g.current_user is None:
       session.clear()
       return redirect(url_for("login"))
+    if request.endpoint == "entry_form" and request.args.get("site_id"):
+      qr_site_id = optional_integer(request.args.get("site_id"), "site_id")
+      qr_article_id = optional_integer(
+          request.args.get("article_id"), "article_id"
+      )
+      cur = get_db().cursor()
+      cur.execute(
+          "SELECT id FROM articles WHERE id = %s AND site_id = %s",
+          (qr_article_id, qr_site_id),
+      )
+      qr_article = cur.fetchone()
+      cur.close()
+      if qr_article:
+        session["active_site_id"] = qr_site_id
+    if request.endpoint not in {"choose_site", "logout"}:
+      active_site_id = optional_integer(
+          session.get("active_site_id"), "site_id"
+      )
+      if active_site_id is None:
+        return redirect(url_for("choose_site"))
+      cur = get_db().cursor()
+      cur.execute(
+          "SELECT id, name FROM sites WHERE id = %s",
+          (active_site_id,),
+      )
+      g.current_site = cur.fetchone()
+      cur.close()
+      if g.current_site is None:
+        session.pop("active_site_id", None)
+        return redirect(url_for("choose_site"))
   if request.method == "POST":
     submitted_token = request.form.get("csrf_token", "")
     if not submitted_token or not hmac.compare_digest(submitted_token, csrf_token()):
@@ -371,10 +442,7 @@ def login():
       session["authenticated"] = True
       session["user_id"] = user["id"]
       csrf_token()
-      next_url = request.args.get("next", "")
-      if next_url.startswith("/") and not next_url.startswith("//"):
-        return redirect(next_url)
-      return redirect(url_for("home"))
+      return redirect(url_for("choose_site"))
     error = "Identifiant ou mot de passe incorrect."
   return render_template_string(LOGIN_TEMPLATE, error=error, csrf_token=csrf_token())
 
@@ -385,10 +453,43 @@ def logout():
   return redirect(url_for("login"))
 
 
+@app.route("/select-site", methods=["GET", "POST"])
+def choose_site():
+  db = get_db()
+  cur = db.cursor()
+  if request.method == "POST":
+    site_id = form_integer("site_id", minimum=1)
+    cur.execute("SELECT id FROM sites WHERE id = %s", (site_id,))
+    site = cur.fetchone()
+    if site is None:
+      cur.close()
+      abort(400, description="Le site sélectionné n’existe pas.")
+    session["active_site_id"] = site["id"]
+    cur.close()
+    return redirect(url_for("home"))
+  cur.execute("SELECT id, name FROM sites ORDER BY name")
+  sites = cur.fetchall()
+  cur.close()
+  return render_template_string(SITE_SELECT_TEMPLATE, sites=sites)
+
+
 def require_admin():
   current_user = getattr(g, "current_user", None)
   if not current_user or current_user["role"] != "admin":
     abort(403)
+
+
+def validate_site_assignment(cursor, table, record_id, field_name):
+  if record_id is None:
+    return
+  if table not in {"locations", "equipment"}:
+    raise ValueError("Unsupported site assignment table.")
+  cursor.execute(
+      f"SELECT id FROM {table} WHERE id = %s AND site_id = %s",
+      (record_id, g.current_site["id"]),
+  )
+  if cursor.fetchone() is None:
+    abort(400, description=f"{field_name} doit appartenir au site sélectionné.")
 
 
 def get_db():
@@ -411,6 +512,10 @@ def init_db():
   conn.autocommit = True
   cursor = conn.cursor(row_factory=dict_row)
   cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sites (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
         CREATE TABLE IF NOT EXISTS locations (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL
@@ -456,6 +561,36 @@ def init_db():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     """)
+  cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
+  try:
+    cursor.execute("""
+          INSERT INTO sites (name)
+          VALUES ('HOTEL'), ('CAMPING'), ('MYR'), ('BERGERIE')
+          ON CONFLICT (name) DO NOTHING;
+          ALTER TABLE locations
+              ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
+          ALTER TABLE equipment
+              ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
+          ALTER TABLE articles
+              ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
+          UPDATE locations
+          SET site_id = (SELECT id FROM sites WHERE name = 'HOTEL')
+          WHERE site_id IS NULL;
+          UPDATE equipment
+          SET site_id = (SELECT id FROM sites WHERE name = 'HOTEL')
+          WHERE site_id IS NULL;
+          UPDATE articles
+          SET site_id = (SELECT id FROM sites WHERE name = 'HOTEL')
+          WHERE site_id IS NULL;
+          ALTER TABLE locations ALTER COLUMN site_id SET NOT NULL;
+          ALTER TABLE equipment ALTER COLUMN site_id SET NOT NULL;
+          ALTER TABLE articles ALTER COLUMN site_id SET NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_articles_site_id ON articles (site_id);
+          CREATE INDEX IF NOT EXISTS idx_locations_site_id ON locations (site_id);
+          CREATE INDEX IF NOT EXISTS idx_equipment_site_id ON equipment (site_id);
+      """)
+  finally:
+    cursor.execute("SELECT pg_advisory_unlock(73401219078123::bigint)")
   cursor.execute("SELECT pg_advisory_lock(73401219078123::bigint)")
   try:
     cursor.execute("SELECT COUNT(*) AS count FROM users")
@@ -663,6 +798,9 @@ LAYOUT_HEADER = """
                 </div>
 
                 <nav class="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1">
+                    <a href="{{ url_for('choose_site') }}" class="col-span-2 flex min-h-11 items-center justify-center gap-2 rounded-md border border-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-forest-light sm:col-span-1">
+                        <span class="text-emerald-200">SITE :</span> {{ g.current_site.name }} <span aria-hidden="true">⌄</span>
+                    </a>
                     <span class="col-span-2 text-center px-2 py-1 text-[10px] text-emerald-200 sm:col-span-1">{{ g.current_user.username }}</span>
                     <a href="/entry" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>✏️</span> Entrée / Sortie
@@ -699,6 +837,55 @@ LAYOUT_FOOTER = """
 </body>
 </html>
 """
+
+DASHBOARD_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <div class="mx-auto max-w-5xl space-y-5">
+        <section class="rounded-2xl bg-forest p-5 text-white shadow-sm sm:p-7">
+            <p class="text-xs font-bold uppercase tracking-[0.18em] text-emerald-200">Tableau de bord</p>
+            <h1 class="mt-1 text-2xl font-extrabold sm:text-3xl">Site {{ g.current_site.name }}</h1>
+            <p class="mt-2 text-sm text-emerald-100">Choisissez une action pour gérer les stocks de ce site.</p>
+            <div class="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div class="rounded-xl border border-emerald-700 bg-emerald-950/30 p-3">
+                    <p class="text-[11px] font-semibold uppercase text-emerald-200">Articles</p>
+                    <p class="mt-1 text-2xl font-extrabold">{{ article_count }}</p>
+                </div>
+                <div class="rounded-xl border border-emerald-700 bg-emerald-950/30 p-3">
+                    <p class="text-[11px] font-semibold uppercase text-emerald-200">En rupture</p>
+                    <p class="mt-1 text-2xl font-extrabold">{{ out_of_stock_count }}</p>
+                </div>
+                <div class="col-span-2 rounded-xl border border-emerald-700 bg-emerald-950/30 p-3 sm:col-span-1">
+                    <p class="text-[11px] font-semibold uppercase text-emerald-200">Valeur du stock</p>
+                    <p class="mt-1 text-xl font-extrabold">{{ "%.2f"|format(total_stock_value) }} €</p>
+                </div>
+            </div>
+        </section>
+
+        <nav class="grid grid-cols-2 gap-3 sm:grid-cols-3" aria-label="Actions principales">
+            <a href="{{ url_for('stock_view') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">📦</span><span class="text-base font-extrabold text-slate-900">Consulter le stock</span>
+            </a>
+            <a href="{{ url_for('entry_form') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">↕️</span><span class="text-base font-extrabold text-slate-900">Entrée / sortie</span>
+            </a>
+            <a href="{{ url_for('movement_report') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">🧾</span><span class="text-base font-extrabold text-slate-900">Historique des mouvements</span>
+            </a>
+            <a href="{{ url_for('monthly_close') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">📅</span><span class="text-base font-extrabold text-slate-900">Clôture mensuelle</span>
+            </a>
+            <a href="{{ url_for('stock_print_view') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">🏷️</span><span class="text-base font-extrabold text-slate-900">Inventaire imprimable</span>
+            </a>
+            <a href="{{ url_for('settings_view') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">⚙️</span><span class="text-base font-extrabold text-slate-900">Réglages du site</span>
+            </a>
+        </nav>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
 
 # --- 1. PAGE DE SAISIE DE DONNÉES ---
 ENTRY_TEMPLATE = (
@@ -986,6 +1173,7 @@ ENTRY_TEMPLATE = (
             const video = document.getElementById("qr-video");
             const status = document.getElementById("qr-scan-status");
             const articleSelect = document.getElementById("exit-article-id");
+            const activeSiteId = "{{ g.current_site.id }}";
             const canvas = document.createElement("canvas");
             const context = canvas.getContext("2d", { willReadFrequently: true });
             let mediaStream = null;
@@ -1030,6 +1218,7 @@ ENTRY_TEMPLATE = (
                             try {
                                 const scannedUrl = new URL(result.data);
                                 const scannedId = scannedUrl.searchParams.get("article_id") || "";
+                                const scannedSiteId = scannedUrl.searchParams.get("site_id") || "";
                                 if (
                                     scannedUrl.origin === window.location.origin
                                     && scannedUrl.pathname === "/entry"
@@ -1038,6 +1227,10 @@ ENTRY_TEMPLATE = (
                                     )
                                     && /^\\d+$/.test(scannedId)
                                 ) {
+                                    if (/^\\d+$/.test(scannedSiteId) && scannedSiteId !== activeSiteId) {
+                                        window.location.href = scannedUrl.href;
+                                        return;
+                                    }
                                     articleId = scannedId;
                                 }
                             } catch {
@@ -1564,7 +1757,7 @@ MONTHLY_CLOSE_TEMPLATE = (
                 {% if unvalued_count %}<li>{{ unvalued_count }} article(s) en stock n’ont pas de coût d’entrée exploitable pour calculer leur CUMP.</li>{% endif %}
                 {% if legacy_price_status_count %}<li>Le statut estimatif d’anciens prix n’est pas historisé pour {{ legacy_price_status_count }} article(s) ; ces prix et soldes d’ouverture sont donc estimés.</li>{% endif %}
                 {% if estimated_count %}<li>{{ estimated_count }} article(s) ont un coût d’entrée estimatif ou un statut de prix historique incomplet.</li>{% endif %}
-                {% if orphaned_movement_count %}<li>{{ orphaned_movement_count }} mouvement(s) antérieur(s) à la clôture concernent des articles supprimés et ne peuvent pas être ventilés ; les synthèses sont incomplètes.</li>{% endif %}
+                {% if orphaned_movement_count %}<li>{{ orphaned_movement_count }} mouvement(s) historiques, tous sites confondus, ne sont plus rattachés à une fiche article et ne peuvent pas être ventilés.</li>{% endif %}
                 {% if duplicate_name_count %}<li>{{ duplicate_name_count }} désignation(s) sont utilisées par plusieurs fiches. Chaque ligne reste séparée par identifiant (ID) ; aucune fusion automatique n’est faite, car chaque fiche a son propre historique.</li>{% endif %}
                 {% if unassigned_location_count %}<li>{{ unassigned_location_count }} fiche(s) n’ont pas d’emplacement renseigné, directement ou via leur équipement.</li>{% endif %}
                 {% if unassigned_equipment_count %}<li>{{ unassigned_equipment_count }} fiche(s) n’ont pas d’équipement associé. Vérifiez la configuration si cette information est requise.</li>{% endif %}
@@ -1992,7 +2185,9 @@ def calculate_total_stock_value():
       """
           SELECT COALESCE(SUM(quantity * COALESCE(price, 0)), 0) AS total
           FROM articles
-      """
+          WHERE site_id = %s
+      """,
+      (g.current_site["id"],),
   )
   total = cur.fetchone()["total"]
   cur.close()
@@ -2414,14 +2609,35 @@ def build_monthly_close_rows(
 
 @app.route("/")
 def home():
-  return redirect(url_for("stock_view")  )
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          SELECT COUNT(*) AS article_count,
+                 COUNT(*) FILTER (WHERE quantity = 0) AS out_of_stock_count
+          FROM articles
+          WHERE site_id = %s
+      """,
+      (g.current_site["id"],),
+  )
+  site_summary = cur.fetchone()
+  cur.close()
+  return render_template_string(
+      DASHBOARD_TEMPLATE,
+      active_page="home",
+      total_stock_value=calculate_total_stock_value(),
+      article_count=site_summary["article_count"],
+      out_of_stock_count=site_summary["out_of_stock_count"],
+  )
 
 
 @app.route("/stock/print")
 def stock_print_view():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT id, name FROM locations ORDER BY name")
+  cur.execute(
+      "SELECT id, name FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   locations = cur.fetchall()
   location_id = optional_integer(request.args.get("loc_filter"), "loc_filter")
 
@@ -2432,10 +2648,11 @@ def stock_print_view():
       LEFT JOIN locations l ON a.location_id = l.id
       LEFT JOIN equipment e ON a.equipment_id = e.id
       LEFT JOIN locations equipment_location ON e.location_id = equipment_location.id
+      WHERE a.site_id = %s
   """
-  params = []
+  params = [g.current_site["id"]]
   if location_id:
-    query += " WHERE COALESCE(a.location_id, e.location_id) = %s"
+    query += " AND COALESCE(a.location_id, e.location_id) = %s"
     params.append(location_id)
   query += " ORDER BY loc_name ASC, a.name ASC, a.id ASC"
   cur.execute(query, params)
@@ -2447,7 +2664,8 @@ def stock_print_view():
     item = dict(article)
     item["qr_code_data"] = article_qr_code_data(
         APP_BASE_URL + url_for(
-            "entry_form", article_id=item["id"], mode="choose"
+            "entry_form", article_id=item["id"], mode="choose",
+            site_id=item["site_id"],
         )
     )
     location_name = item["loc_name"]
@@ -2462,6 +2680,7 @@ def stock_print_view():
   return render_template_string(
       PRINT_STOCK_TEMPLATE,
       active_page="stock",
+      total_stock_value=calculate_total_stock_value(),
       locations=locations,
       current_location_id=location_id,
       grouped_articles=grouped_articles,
@@ -2473,13 +2692,20 @@ def stock_print_view():
 def entry_form():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT * FROM locations ORDER BY name")
+  cur.execute(
+      "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment ORDER BY name")
+  cur.execute(
+      "SELECT * FROM equipment WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   equipment = cur.fetchall()
   cur.execute(
       "SELECT a.*, l.name as loc_name FROM articles a LEFT JOIN locations l ON"
-      " a.location_id = l.id ORDER BY a.name"
+      " a.location_id = l.id WHERE a.site_id = %s ORDER BY a.name",
+      (g.current_site["id"],),
   )
   articles = cur.fetchall()
   cur.close()
@@ -2522,9 +2748,15 @@ def entry_form():
 def stock_view():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT * FROM locations ORDER BY name")
+  cur.execute(
+      "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment ORDER BY name")
+  cur.execute(
+      "SELECT * FROM equipment WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   equipment = cur.fetchall()
 
   search_query = request.args.get("search", "").strip()
@@ -2540,9 +2772,9 @@ def stock_view():
         LEFT JOIN locations l ON a.location_id = l.id
         LEFT JOIN equipment e ON a.equipment_id = e.id
         LEFT JOIN locations equipment_location ON e.location_id = equipment_location.id
-        WHERE 1=1
+        WHERE a.site_id = %s
     """
-  params = []
+  params = [g.current_site["id"]]
 
   if search_query:
     search_terms = search_query.split()
@@ -2567,23 +2799,27 @@ def stock_view():
   show_rupture_popup = False
   rupture_articles = []
   rupture_count = 0
-  if not session.get("_rupture_popup_seen"):
+  rupture_popup_key = f"_rupture_popup_seen_{g.current_site['id']}"
+  if not session.get(rupture_popup_key):
     cur = db.cursor()
-    cur.execute("SELECT COUNT(*) AS count FROM articles WHERE quantity = 0")
+    cur.execute(
+        "SELECT COUNT(*) AS count FROM articles WHERE site_id = %s AND quantity = 0",
+        (g.current_site["id"],),
+    )
     rupture_count = cur.fetchone()["count"]
     if rupture_count:
       cur.execute("""
           SELECT a.name, a.reference, COALESCE(l.name, 'Non assigné') AS loc_name
           FROM articles a
           LEFT JOIN locations l ON a.location_id = l.id
-          WHERE a.quantity = 0
+          WHERE a.site_id = %s AND a.quantity = 0
           ORDER BY a.name ASC
           LIMIT 50
-      """)
+      """, (g.current_site["id"],))
       rupture_articles = cur.fetchall()
       show_rupture_popup = True
     cur.close()
-    session["_rupture_popup_seen"] = True
+    session[rupture_popup_key] = True
 
   total_stock_value = calculate_total_stock_value()
   matched_article_count = len(articles)
@@ -2649,10 +2885,13 @@ def movement_report():
 
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT id, name, reference FROM articles ORDER BY name")
+  cur.execute(
+      "SELECT id, name, reference FROM articles WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   articles = cur.fetchall()
-  where_clause = "m.date >= %s AND m.date < %s + INTERVAL '1 day'"
-  params = [date_from, date_to]
+  where_clause = "a.site_id = %s AND m.date >= %s AND m.date < %s + INTERVAL '1 day'"
+  params = [g.current_site["id"], date_from, date_to]
   if current_article_id:
     where_clause += " AND m.article_id = %s"
     params.append(current_article_id)
@@ -2776,8 +3015,9 @@ def monthly_close():
       LEFT JOIN locations l ON l.id = a.location_id
       LEFT JOIN equipment e ON e.id = a.equipment_id
       LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+      WHERE a.site_id = %s
       ORDER BY COALESCE(l.name, equipment_location.name, 'Non assigné'), a.name
-  """, (period_start,))
+  """, (period_start, g.current_site["id"]))
   articles = cur.fetchall()
   cur.execute(
       "SELECT COUNT(*) AS count FROM movements WHERE article_id IS NULL AND date < %s",
@@ -2804,9 +3044,10 @@ def monthly_close():
              ) AS has_invalid_movement
       FROM movements
       WHERE article_id IS NOT NULL
+        AND article_id IN (SELECT id FROM articles WHERE site_id = %s)
         AND (date <= CURRENT_TIMESTAMP OR date IS NULL)
       GROUP BY article_id
-  """)
+  """, (g.current_site["id"],))
   movement_summaries = {
       summary["article_id"]: summary for summary in cur.fetchall()
   }
@@ -2820,9 +3061,10 @@ def monthly_close():
       SELECT article_id, type, quantity, unit_price,
              unit_price_estimated, date
       FROM movements
-      WHERE article_id IS NOT NULL AND date <= CURRENT_TIMESTAMP
+      WHERE article_id IN (SELECT id FROM articles WHERE site_id = %s)
+        AND date <= CURRENT_TIMESTAMP
       ORDER BY article_id, date, id
-  """)
+  """, (g.current_site["id"],))
   monthly_close_rows, totals = build_monthly_close_rows(
       articles,
       movement_cur,
@@ -2883,8 +3125,13 @@ def edit_article(id):
         abort(400, description="La date d'entrée est invalide.")
     location_id = optional_integer(request.form.get("location_id"), "location_id")
     equipment_id = optional_integer(request.form.get("equipment_id"), "equipment_id")
+    validate_site_assignment(cur, "locations", location_id, "L’emplacement")
+    validate_site_assignment(cur, "equipment", equipment_id, "L’équipement")
 
-    cur.execute("SELECT quantity, price FROM articles WHERE id = %s FOR UPDATE", (id,))
+    cur.execute(
+        "SELECT quantity, price FROM articles WHERE id = %s AND site_id = %s FOR UPDATE",
+        (id, g.current_site["id"]),
+    )
     article = cur.fetchone()
     if article is None:
       abort(404)
@@ -2895,11 +3142,12 @@ def edit_article(id):
           """
               UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
               is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
-              equipment_id=%s, image_filename=%s WHERE id=%s
+              equipment_id=%s, image_filename=%s WHERE id=%s AND site_id=%s
           """,
           (
               name, reference, quantity, min_threshold, price, is_estimated_price,
-              supplier, invoice_number, entry_date, location_id, equipment_id, filename, id,
+              supplier, invoice_number, entry_date, location_id, equipment_id,
+              filename, id, g.current_site["id"],
           ),
       )
     else:
@@ -2907,11 +3155,12 @@ def edit_article(id):
           """
               UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
               is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
-              equipment_id=%s WHERE id=%s
+              equipment_id=%s WHERE id=%s AND site_id=%s
           """,
           (
               name, reference, quantity, min_threshold, price, is_estimated_price,
-              supplier, invoice_number, entry_date, location_id, equipment_id, id,
+              supplier, invoice_number, entry_date, location_id, equipment_id,
+              id, g.current_site["id"],
           ),
       )
     quantity_delta = quantity - old_quantity
@@ -2936,14 +3185,23 @@ def edit_article(id):
     cur.close()
     return redirect(url_for("edit_article", id=id))
 
-  cur.execute("SELECT * FROM articles WHERE id = %s", (id,))
+  cur.execute(
+      "SELECT * FROM articles WHERE id = %s AND site_id = %s",
+      (id, g.current_site["id"]),
+  )
   article = cur.fetchone()
   if article is None:
     cur.close()
     abort(404)
-  cur.execute("SELECT * FROM locations ORDER BY name")
+  cur.execute(
+      "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   locations = cur.fetchall()
-  cur.execute("SELECT * FROM equipment ORDER BY name")
+  cur.execute(
+      "SELECT * FROM equipment WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   equipment = cur.fetchall()
   cur.close()
   total_val = calculate_total_stock_value()
@@ -2959,7 +3217,8 @@ def edit_article(id):
       article_created=request.args.get("created") == "1",
       qr_code_data=article_qr_code_data(
           APP_BASE_URL + url_for(
-              "entry_form", article_id=id, mode="choose"
+              "entry_form", article_id=id, mode="choose",
+              site_id=g.current_site["id"],
           )
       ),
   )
@@ -2969,14 +3228,18 @@ def edit_article(id):
 def settings_view():
   db = get_db()
   cur = db.cursor()
-  cur.execute("SELECT * FROM locations ORDER BY name")
+  cur.execute(
+      "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
   locations = cur.fetchall()
   cur.execute("""
         SELECT e.*, l.name as loc_name 
         FROM equipment e 
         LEFT JOIN locations l ON e.location_id = l.id 
+        WHERE e.site_id = %s
         ORDER BY e.name
-    """)
+    """, (g.current_site["id"],))
   equipment = cur.fetchall()
   cur.execute(
       "SELECT id, username, role, active FROM users ORDER BY username"
@@ -3092,7 +3355,10 @@ def add_location():
   name = request.form.get("name", "").strip()
   if not name:
     abort(400, description="Le nom du lieu est obligatoire.")
-  cur.execute("INSERT INTO locations (name) VALUES (%s)", (name,))
+  cur.execute(
+      "INSERT INTO locations (name, site_id) VALUES (%s, %s)",
+      (name, g.current_site["id"]),
+  )
   db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
@@ -3105,7 +3371,10 @@ def edit_location(id):
   name = request.form.get("name", "").strip()
   if not name:
     abort(400, description="Le nom du lieu est obligatoire.")
-  cur.execute("UPDATE locations SET name = %s WHERE id = %s", (name, id))
+  cur.execute(
+      "UPDATE locations SET name = %s WHERE id = %s AND site_id = %s",
+      (name, id, g.current_site["id"]),
+  )
   db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
@@ -3115,7 +3384,10 @@ def edit_location(id):
 def delete_location(id):
   db = get_db()
   cur = db.cursor()
-  cur.execute("DELETE FROM locations WHERE id = %s", (id,))
+  cur.execute(
+      "DELETE FROM locations WHERE id = %s AND site_id = %s",
+      (id, g.current_site["id"]),
+  )
   db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
@@ -3129,9 +3401,10 @@ def add_equipment():
   if not name:
     abort(400, description="Le nom de l'équipement est obligatoire.")
   location_id = optional_integer(request.form.get("location_id"), "location_id")
+  validate_site_assignment(cur, "locations", location_id, "L’emplacement")
   cur.execute(
-      "INSERT INTO equipment (name, location_id) VALUES (%s, %s)",
-      (name, location_id),
+      "INSERT INTO equipment (name, location_id, site_id) VALUES (%s, %s, %s)",
+      (name, location_id, g.current_site["id"]),
   )
   db.commit()
   cur.close()
@@ -3146,9 +3419,10 @@ def edit_equipment(id):
   if not name:
     abort(400, description="Le nom de l'équipement est obligatoire.")
   location_id = optional_integer(request.form.get("location_id"), "location_id")
+  validate_site_assignment(cur, "locations", location_id, "L’emplacement")
   cur.execute(
-      "UPDATE equipment SET name = %s, location_id = %s WHERE id = %s",
-      (name, location_id, id),
+      "UPDATE equipment SET name = %s, location_id = %s WHERE id = %s AND site_id = %s",
+      (name, location_id, id, g.current_site["id"]),
   )
   db.commit()
   cur.close()
@@ -3159,7 +3433,10 @@ def edit_equipment(id):
 def delete_equipment(id):
   db = get_db()
   cur = db.cursor()
-  cur.execute("DELETE FROM equipment WHERE id = %s", (id,))
+  cur.execute(
+      "DELETE FROM equipment WHERE id = %s AND site_id = %s",
+      (id, g.current_site["id"]),
+  )
   db.commit()
   cur.close()
   return redirect(url_for("settings_view"))
@@ -3187,14 +3464,16 @@ def add_article():
       abort(400, description="La date d'entrée est invalide.")
   location_id = optional_integer(request.form.get("location_id"), "location_id")
   equipment_id = optional_integer(request.form.get("equipment_id"), "equipment_id")
+  validate_site_assignment(cur, "locations", location_id, "L’emplacement")
+  validate_site_assignment(cur, "equipment", equipment_id, "L’équipement")
   reason = f"Entrée - Fournisseur: {supplier or 'N/C'} | Facture: {invoice_number or 'N/C'}"
 
   filename = save_uploaded_image(request.files.get("photo"))
 
   cur.execute(
       """
-        INSERT INTO articles (name, reference, quantity, min_threshold, price, is_estimated_price, supplier, invoice_number, entry_date, location_id, equipment_id, image_filename) 
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        INSERT INTO articles (name, reference, quantity, min_threshold, price, is_estimated_price, supplier, invoice_number, entry_date, location_id, equipment_id, image_filename, site_id) 
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
       (
           name,
@@ -3209,6 +3488,7 @@ def add_article():
           location_id,
           equipment_id,
           filename,
+          g.current_site["id"],
       ),
   )
   article_id = cur.fetchone()["id"]
@@ -3249,10 +3529,10 @@ def movement_entry():
               is_estimated_price = 0,
               supplier = COALESCE(%s, supplier),
               invoice_number = %s
-          WHERE id = %s
+          WHERE id = %s AND site_id = %s
           RETURNING id
       """,
-      (qty, price, supplier, invoice_number, article_id),
+      (qty, price, supplier, invoice_number, article_id, g.current_site["id"]),
   )
   article = cur.fetchone()
   if article is None:
@@ -3286,10 +3566,10 @@ def movement_exit():
   cur.execute(
       """
           UPDATE articles SET quantity = quantity - %s
-          WHERE id = %s AND quantity >= %s
+          WHERE id = %s AND site_id = %s AND quantity >= %s
           RETURNING id, price, is_estimated_price
       """,
-      (qty, article_id, qty),
+      (qty, article_id, g.current_site["id"], qty),
   )
   article = cur.fetchone()
   if article is None:
@@ -3323,8 +3603,8 @@ def update_quantity(id):
   if action not in {"plus", "minus"}:
     abort(400, description="Action de mise à jour invalide.")
   cur.execute(
-      "SELECT quantity, price, is_estimated_price FROM articles WHERE id = %s FOR UPDATE",
-      (id,),
+      "SELECT quantity, price, is_estimated_price FROM articles WHERE id = %s AND site_id = %s FOR UPDATE",
+      (id, g.current_site["id"]),
   )
   item = cur.fetchone()
   if item is None:
@@ -3333,7 +3613,10 @@ def update_quantity(id):
   if action == "minus" and current_qty == 0:
     abort(400, description="Le stock est déjà à zéro.")
   delta = 1 if action == "plus" else -1
-  cur.execute("UPDATE articles SET quantity = quantity + %s WHERE id = %s", (delta, id))
+  cur.execute(
+      "UPDATE articles SET quantity = quantity + %s WHERE id = %s AND site_id = %s",
+      (delta, id, g.current_site["id"]),
+  )
   cur.execute(
       """
           INSERT INTO movements
@@ -3357,7 +3640,10 @@ def update_quantity(id):
 def delete_article(id):
   db = get_db()
   cur = db.cursor()
-  cur.execute("DELETE FROM articles WHERE id = %s", (id,))
+  cur.execute(
+      "DELETE FROM articles WHERE id = %s AND site_id = %s",
+      (id, g.current_site["id"]),
+  )
   db.commit()
   cur.close()
   return redirect(url_for("stock_view"))
