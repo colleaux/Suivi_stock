@@ -143,6 +143,35 @@ SITE_SELECT_TEMPLATE = """
             <h1 class="mt-2 text-3xl font-extrabold text-slate-900">Choisissez votre site</h1>
             <p class="mt-2 text-sm text-slate-600">Les stocks affichés et les mouvements seront ceux du site sélectionné.</p>
         </div>
+        <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 class="text-base font-bold text-slate-900">Rechercher un article sur tous les sites</h2>
+            <form method="GET" class="mt-3 flex flex-col gap-2 sm:flex-row">
+                <label for="site-article-search" class="sr-only">Désignation ou référence de l’article</label>
+                <input id="site-article-search" type="search" name="q" value="{{ search_query }}" placeholder="Désignation ou référence…" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-4 text-base focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                <button type="submit" class="min-h-12 rounded-lg bg-emerald-800 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-900">Rechercher</button>
+            </form>
+            {% if search_query %}
+            <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">{{ search_results|length }} résultat(s) pour « {{ search_query }} »{% if search_results|length == 50 %} — seuls les 50 premiers sont affichés{% endif %}.</p>
+            <div class="mt-3 space-y-2">
+                {% for item in search_results %}
+                <form method="POST" class="m-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="site_id" value="{{ item.site_id }}">
+                    <input type="hidden" name="article_id" value="{{ item.id }}">
+                    <button type="submit" class="flex min-h-16 w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
+                            <span class="mt-1 block text-xs text-slate-600">{{ item.site_name }} · Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.location_name %} · {{ item.location_name }}{% endif %}</span>
+                        </span>
+                        <span class="shrink-0 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-bold text-white">Ouvrir</span>
+                    </button>
+                </form>
+                {% else %}
+                <p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article trouvé. Essayez une autre désignation ou référence.</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {% for site in sites %}
             <form method="POST" class="m-0">
@@ -459,18 +488,62 @@ def choose_site():
   cur = db.cursor()
   if request.method == "POST":
     site_id = form_integer("site_id", minimum=1)
-    cur.execute("SELECT id FROM sites WHERE id = %s", (site_id,))
+    article_id = optional_integer(request.form.get("article_id"), "article_id")
+    if article_id:
+      cur.execute(
+          "SELECT site_id AS id FROM articles WHERE id = %s AND site_id = %s",
+          (article_id, site_id),
+      )
+    else:
+      cur.execute("SELECT id FROM sites WHERE id = %s", (site_id,))
     site = cur.fetchone()
     if site is None:
       cur.close()
-      abort(400, description="Le site sélectionné n’existe pas.")
+      abort(400, description="Le site ou l’article sélectionné n’existe pas.")
     session["active_site_id"] = site["id"]
     cur.close()
+    if article_id:
+      return redirect(url_for("edit_article", id=article_id))
     return redirect(url_for("home"))
+  search_query = request.args.get("q", "").strip()
+  search_results = []
+  if search_query:
+    search_terms = search_query.split()
+    conditions = []
+    params = []
+    for term in search_terms:
+      escaped_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+      conditions.append(
+          "(a.name ILIKE %s OR COALESCE(a.reference, '') ILIKE %s)"
+      )
+      params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
+    cur.execute(
+        """
+            SELECT a.id, a.site_id, a.name, a.reference, a.quantity,
+                   s.name AS site_name,
+                   COALESCE(l.name, equipment_location.name) AS location_name
+            FROM articles a
+            JOIN sites s ON s.id = a.site_id
+            LEFT JOIN locations l ON l.id = a.location_id
+            LEFT JOIN equipment e ON e.id = a.equipment_id
+            LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+            WHERE
+        """ + " AND ".join(conditions) + """
+            ORDER BY s.name, a.name, a.id
+            LIMIT 50
+        """,
+        params,
+    )
+    search_results = cur.fetchall()
   cur.execute("SELECT id, name FROM sites ORDER BY name")
   sites = cur.fetchall()
   cur.close()
-  return render_template_string(SITE_SELECT_TEMPLATE, sites=sites)
+  return render_template_string(
+      SITE_SELECT_TEMPLATE,
+      sites=sites,
+      search_query=search_query,
+      search_results=search_results,
+  )
 
 
 def require_admin():
