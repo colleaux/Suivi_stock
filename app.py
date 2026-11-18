@@ -158,13 +158,16 @@ SITE_SELECT_TEMPLATE = """
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="site_id" value="{{ item.site_id }}">
                     <input type="hidden" name="article_id" value="{{ item.id }}">
-                    <button type="submit" class="flex min-h-16 w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
-                        <span class="min-w-0">
+                    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="min-w-0">
                             <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
                             <span class="mt-1 block text-xs text-slate-600">{{ item.site_name }} · Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.location_name %} · {{ item.location_name }}{% endif %}</span>
-                        </span>
-                        <span class="shrink-0 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-bold text-white">Ouvrir</span>
-                    </button>
+                        </div>
+                        <div class="flex shrink-0 gap-2">
+                            <button type="submit" name="action" value="edit" class="min-h-11 flex-1 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-900 sm:flex-none">Ouvrir</button>
+                            <button type="submit" name="action" value="exit" class="min-h-11 flex-1 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700 sm:flex-none">Faire une sortie</button>
+                        </div>
+                    </div>
                 </form>
                 {% else %}
                 <p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article trouvé. Essayez une autre désignation ou référence.</p>
@@ -489,7 +492,11 @@ def choose_site():
   if request.method == "POST":
     site_id = form_integer("site_id", minimum=1)
     article_id = optional_integer(request.form.get("article_id"), "article_id")
+    action = request.form.get("action", "edit")
     if article_id:
+      if action not in {"edit", "exit"}:
+        cur.close()
+        abort(400, description="Action de recherche invalide.")
       cur.execute(
           "SELECT site_id AS id FROM articles WHERE id = %s AND site_id = %s",
           (article_id, site_id),
@@ -503,6 +510,10 @@ def choose_site():
     session["active_site_id"] = site["id"]
     cur.close()
     if article_id:
+      if action == "exit":
+        return redirect(
+            url_for("entry_form", article_id=article_id, mode="exit")
+        )
       return redirect(url_for("edit_article", id=article_id))
     return redirect(url_for("home"))
   search_query = request.args.get("q", "").strip()
@@ -717,6 +728,7 @@ def init_db():
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS invoice_number TEXT;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price REAL;
         ALTER TABLE movements ADD COLUMN IF NOT EXISTS unit_price_estimated BOOLEAN;
+        ALTER TABLE movements ADD COLUMN IF NOT EXISTS performed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS idx_movements_date_id
             ON movements (date DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_movements_article_date_id
@@ -1734,6 +1746,7 @@ MOVEMENTS_TEMPLATE = (
                             <th class="p-3">Date</th>
                             <th class="p-3">Mouvement</th>
                             <th class="p-3">Article</th>
+                            <th class="p-3">Personne (ID)</th>
                             <th class="p-3 text-right">Quantité</th>
                             <th class="p-3">Motif</th>
                             <th class="p-3 text-right">Prix unitaire</th>
@@ -1746,6 +1759,7 @@ MOVEMENTS_TEMPLATE = (
                             <td class="whitespace-nowrap p-3">{{ movement.date.strftime('%d/%m/%Y %H:%M') if movement.date else '—' }}</td>
                             <td class="p-3"><span class="rounded px-2 py-1 text-xs font-bold {% if movement.type == 'ENTREE' %}bg-emerald-100 text-emerald-900{% else %}bg-amber-100 text-amber-900{% endif %}">{{ movement.type }}</span></td>
                             <td class="p-3 font-semibold">{{ movement.article_name or 'Article supprimé' }}{% if movement.reference %}<span class="block text-xs font-normal text-slate-500">{{ movement.reference }}</span>{% endif %}</td>
+                            <td class="p-3">{% if movement.actor_user_id %}<span class="font-semibold">ID {{ movement.actor_user_id }}</span>{% if movement.actor_username %}<span class="block text-xs text-slate-500">{{ movement.actor_username }}</span>{% endif %}{% else %}<span class="text-slate-500">Non renseigné</span>{% endif %}</td>
                             <td class="p-3 text-right font-semibold">{{ movement.quantity }}</td>
                             <td class="max-w-xs p-3">{{ movement.reason or '—' }}{% if movement.supplier %}<span class="block text-xs text-slate-500">Fournisseur : {{ movement.supplier }}</span>{% endif %}{% if movement.invoice_number %}<span class="block text-xs text-slate-500">Facture : {{ movement.invoice_number }}</span>{% endif %}</td>
                             <td class="whitespace-nowrap p-3 text-right">{% if movement.unit_price is not none %}{{ "%.2f"|format(movement.unit_price) }} €{% if movement.uses_current_price %}<span class="block text-xs font-normal text-slate-500">prix actuel (ancien mouvement)</span>{% endif %}{% else %}—{% endif %}</td>
@@ -1878,8 +1892,6 @@ MONTHLY_CLOSE_TEMPLATE = (
                             <th class="p-2">Référence</th>
                             <th class="p-2">Article</th>
                             <th class="p-2">Emplacement / équipement</th>
-                            <th class="p-2 text-right">Ouverture Qté</th>
-                            <th class="p-2 text-right">Ouverture €</th>
                             <th class="p-2 text-right">Entrées Qté</th>
                             <th class="p-2 text-right">Entrées €</th>
                             <th class="p-2 text-right">Sorties Qté</th>
@@ -1896,8 +1908,6 @@ MONTHLY_CLOSE_TEMPLATE = (
                             <td class="whitespace-nowrap p-2 font-mono">{{ item.reference or '—' }}</td>
                             <td class="p-2 font-semibold text-slate-900">{{ item.name }}<span class="ml-1 whitespace-nowrap text-[10px] font-normal text-slate-500">(ID {{ item.id }})</span>{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
                             <td class="p-2">{{ item.location_name }}<span class="block text-slate-500">{{ item.equipment_name or 'Équipement non renseigné' }}</span></td>
-                            <td class="p-2 text-right">{{ item.opening_quantity if item.opening_quantity is not none else 'À vérifier' }}</td>
-                            <td class="whitespace-nowrap p-2 text-right">{% if item.opening_value is not none %}{{ "%.2f"|format(item.opening_value) }} €{% else %}—{% endif %}</td>
                             <td class="p-2 text-right">{{ item.entries_quantity }}</td>
                             <td class="whitespace-nowrap p-2 text-right">{% if item.entries_value is not none %}{{ "%.2f"|format(item.entries_value) }} €{% else %}—{% endif %}</td>
                             <td class="p-2 text-right">{{ item.exits_quantity }}</td>
@@ -1907,14 +1917,12 @@ MONTHLY_CLOSE_TEMPLATE = (
                             <td class="whitespace-nowrap p-2 text-right font-bold">{% if item.closing_value is not none %}{{ "%.2f"|format(item.closing_value) }} €{% else %}—{% endif %}</td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="13" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
+                        <tr><td colspan="11" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
                         {% endfor %}
                     </tbody>
                     <tfoot class="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-900">
                         <tr>
                             <td colspan="4" class="p-2">Totaux des lignes rapprochées · valeurs disponibles</td>
-                            <td class="p-2 text-right">{{ opening_quantity }}</td>
-                            <td class="p-2 text-right">{{ "%.2f"|format(opening_value) }} €</td>
                             <td class="p-2 text-right">{{ entries_quantity }}</td>
                             <td class="p-2 text-right">{{ "%.2f"|format(entries_value) }} €</td>
                             <td class="p-2 text-right">{{ exits_quantity }}</td>
@@ -1942,6 +1950,9 @@ EDIT_ARTICLE_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="max-w-2xl mx-auto space-y-6">
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+        <p role="status" class="rounded-lg p-4 text-sm {% if category == 'error' %}border border-rose-200 bg-rose-50 text-rose-800{% else %}border border-emerald-200 bg-emerald-50 text-emerald-900{% endif %} no-print">{{ message }}</p>
+        {% endfor %}
         {% if article_created %}
         <p class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900 no-print" role="status">Article créé. Imprimez son QR code : le scanner avec l’appareil photo du téléphone ouvre directement le choix Entrée ou Sortie de stock. Une connexion sera demandée si nécessaire.</p>
         {% endif %}
@@ -2032,6 +2043,52 @@ EDIT_ARTICLE_TEMPLATE = (
                 </div>
             </form>
         </div>
+        <section class="no-print rounded-lg border border-sky-200 bg-white p-5 shadow-sm">
+            <h2 class="text-sm font-bold text-slate-900">Copier ou déplacer le stock</h2>
+            <p class="mt-1 text-xs leading-relaxed text-slate-600">La copie crée une nouvelle fiche sans stock. Le déplacement transfère la quantité choisie et conserve une trace d’entrée et de sortie.</p>
+            <form action="{{ url_for('article_relocate', id=article.id) }}" method="POST" class="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="operation" value="copy">
+                <p class="text-xs font-semibold text-slate-800">Copier la fiche (stock initial à 0)</p>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label class="text-xs font-semibold text-slate-600">Site de destination
+                        <select name="target_site_id" data-location-target="copy-location" class="mt-1 w-full rounded border border-slate-300 bg-white p-2.5 text-sm" required>
+                            {% for site in sites %}<option value="{{ site.id }}" {% if site.id == article.site_id %}selected{% endif %}>{{ site.name }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-xs font-semibold text-slate-600">Lieu de stockage
+                        <select id="copy-location" name="target_location_id" class="mt-1 w-full rounded border border-slate-300 bg-white p-2.5 text-sm">
+                            <option value="">-- Aucun --</option>
+                            {% for location in destination_locations %}<option value="{{ location.id }}" data-site-id="{{ location.site_id }}">{{ location.name }}</option>{% endfor %}
+                        </select>
+                    </label>
+                </div>
+                <button type="submit" class="min-h-11 rounded-lg border border-sky-700 px-4 py-2 text-sm font-bold text-sky-800 hover:bg-sky-50">Copier la fiche</button>
+            </form>
+            <form action="{{ url_for('article_relocate', id=article.id) }}" method="POST" class="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="operation" value="transfer">
+                <p class="text-xs font-semibold text-slate-800">Déplacer une quantité de stock</p>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <label class="text-xs font-semibold text-slate-600">Quantité à déplacer
+                        <input type="number" name="quantity" min="1" max="{{ article.quantity }}" value="1" {% if article.quantity < 1 %}disabled{% else %}required{% endif %} class="mt-1 w-full rounded border border-slate-300 p-2.5 text-sm">
+                    </label>
+                    <label class="text-xs font-semibold text-slate-600">Site de destination
+                        <select name="target_site_id" data-location-target="transfer-location" class="mt-1 w-full rounded border border-slate-300 bg-white p-2.5 text-sm" required>
+                            {% for site in sites %}<option value="{{ site.id }}" {% if site.id == article.site_id %}selected{% endif %}>{{ site.name }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-xs font-semibold text-slate-600">Lieu de stockage
+                        <select id="transfer-location" name="target_location_id" class="mt-1 w-full rounded border border-slate-300 bg-white p-2.5 text-sm">
+                            <option value="">-- Aucun --</option>
+                            {% for location in destination_locations %}<option value="{{ location.id }}" data-site-id="{{ location.site_id }}">{{ location.name }}</option>{% endfor %}
+                        </select>
+                    </label>
+                </div>
+                {% if article.quantity < 1 %}<p class="text-xs text-amber-800">Le stock est à zéro : il n’y a aucune quantité à déplacer.</p>{% endif %}
+                <button type="submit" {% if article.quantity < 1 %}disabled{% endif %} class="min-h-11 rounded-lg bg-sky-800 px-4 py-2 text-sm font-bold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-50">Déplacer le stock</button>
+            </form>
+        </section>
         <style>
             @page { size: 85mm 55mm; margin: 0; }
         </style>
@@ -2053,6 +2110,19 @@ EDIT_ARTICLE_TEMPLATE = (
             </div>
         </section>
         <script>
+            document.querySelectorAll("[data-location-target]").forEach((siteSelect) => {
+                const locationSelect = document.getElementById(siteSelect.dataset.locationTarget);
+                const filterLocations = () => {
+                    Array.from(locationSelect.options).forEach((option) => {
+                        if (!option.value) return;
+                        option.hidden = option.dataset.siteId !== siteSelect.value;
+                    });
+                    if (locationSelect.selectedOptions[0]?.hidden) locationSelect.value = "";
+                };
+                siteSelect.addEventListener("change", filterLocations);
+                filterLocations();
+            });
+
             async function printArticleQrLabel() {
                 const photo = document.querySelector(".article-qr-photo");
                 if (photo && !photo.complete) {
@@ -2992,12 +3062,15 @@ def movement_report():
   query = """
       SELECT m.id, m.type, m.quantity, m.reason, m.date, m.supplier,
              m.invoice_number, a.name AS article_name, a.reference,
+             m.performed_by_user_id AS actor_user_id,
+             u.username AS actor_username,
              m.unit_price AS recorded_unit_price,
              m.unit_price IS NULL AS uses_current_price,
              CASE WHEN m.unit_price IS NULL THEN a.price ELSE m.unit_price END
                  AS unit_price
       FROM movements m
       LEFT JOIN articles a ON a.id = m.article_id
+      LEFT JOIN users u ON u.id = m.performed_by_user_id
       WHERE
   """ + where_clause
   query += " ORDER BY m.date DESC, m.id DESC LIMIT %s OFFSET %s"
@@ -3241,11 +3314,13 @@ def edit_article(id):
       cur.execute(
           """
               INSERT INTO movements
-                  (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
-              VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                  (article_id, performed_by_user_id, type, quantity, unit_price,
+                   unit_price_estimated, reason, date)
+              VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
           """,
           (
               id,
+              g.current_user["id"],
               "ENTREE" if quantity_delta > 0 else "SORTIE",
               abs(quantity_delta),
               price,
@@ -3276,6 +3351,10 @@ def edit_article(id):
       (g.current_site["id"],),
   )
   equipment = cur.fetchall()
+  cur.execute("SELECT id, name FROM sites ORDER BY name")
+  sites = cur.fetchall()
+  cur.execute("SELECT id, name, site_id FROM locations ORDER BY site_id, name")
+  destination_locations = cur.fetchall()
   cur.close()
   total_val = calculate_total_stock_value()
 
@@ -3286,6 +3365,8 @@ def edit_article(id):
       article=article,
       locations=locations,
       equipment=equipment,
+      sites=sites,
+      destination_locations=destination_locations,
       total_stock_value=total_val,
       article_created=request.args.get("created") == "1",
       qr_code_data=article_qr_code_data(
@@ -3569,12 +3650,12 @@ def add_article():
   cur.execute(
       """
         INSERT INTO movements
-            (article_id, type, quantity, unit_price, unit_price_estimated,
+            (article_id, performed_by_user_id, type, quantity, unit_price, unit_price_estimated,
              supplier, invoice_number, reason, date)
-        VALUES (%s, 'ENTREE', %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, 'ENTREE', %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
     """,
       (
-          article_id, quantity, price, bool(is_estimated_price),
+          article_id, g.current_user["id"], quantity, price, bool(is_estimated_price),
           supplier, invoice_number, reason,
       ),
   )
@@ -3615,11 +3696,11 @@ def movement_entry():
   cur.execute(
       """
           INSERT INTO movements
-              (article_id, type, quantity, unit_price, unit_price_estimated,
+              (article_id, performed_by_user_id, type, quantity, unit_price, unit_price_estimated,
                supplier, invoice_number, reason, date)
-          VALUES (%s, 'ENTREE', %s, %s, FALSE, %s, %s, %s, CURRENT_TIMESTAMP)
+          VALUES (%s, %s, 'ENTREE', %s, %s, FALSE, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
-      (article_id, qty, price, supplier, invoice_number, reason),
+      (article_id, g.current_user["id"], qty, price, supplier, invoice_number, reason),
   )
   db.commit()
   cur.close()
@@ -3651,11 +3732,13 @@ def movement_exit():
   cur.execute(
       """
           INSERT INTO movements
-              (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
-          VALUES (%s, 'SORTIE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
+              (article_id, performed_by_user_id, type, quantity, unit_price,
+               unit_price_estimated, reason, date)
+          VALUES (%s, %s, 'SORTIE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
       (
           article_id,
+          g.current_user["id"],
           qty,
           article["price"] or 0.0,
           bool(article["is_estimated_price"]),
@@ -3693,11 +3776,13 @@ def update_quantity(id):
   cur.execute(
       """
           INSERT INTO movements
-              (article_id, type, quantity, unit_price, unit_price_estimated, reason, date)
-          VALUES (%s, %s, 1, %s, %s, %s, CURRENT_TIMESTAMP)
+              (article_id, performed_by_user_id, type, quantity, unit_price,
+               unit_price_estimated, reason, date)
+          VALUES (%s, %s, %s, 1, %s, %s, %s, CURRENT_TIMESTAMP)
       """,
       (
           id,
+          g.current_user["id"],
           "ENTREE" if delta > 0 else "SORTIE",
           item["price"] or 0.0,
           bool(item["is_estimated_price"]),
@@ -3707,6 +3792,209 @@ def update_quantity(id):
   db.commit()
   cur.close()
   return redirect(url_for("stock_view"))
+
+
+@app.route("/article/<int:id>/relocate", methods=["POST"])
+def article_relocate(id):
+  operation = request.form.get("operation")
+  if operation not in {"copy", "transfer"}:
+    abort(400, description="Action de copie ou de déplacement invalide.")
+
+  db = get_db()
+  cur = db.cursor()
+  cur.execute(
+      """
+          SELECT a.id, a.site_id, a.name, a.reference, a.quantity, a.price,
+                 a.is_estimated_price, a.min_threshold, a.supplier,
+                 a.invoice_number, a.entry_date, a.image_filename,
+                 a.location_id, a.equipment_id,
+                 COALESCE(a.location_id, source_equipment.location_id)
+                     AS effective_location_id,
+                 COALESCE(source_location.name, equipment_location.name)
+                     AS source_location_name
+          FROM articles a
+          LEFT JOIN equipment source_equipment
+              ON source_equipment.id = a.equipment_id
+          LEFT JOIN locations source_location ON source_location.id = a.location_id
+          LEFT JOIN locations equipment_location
+              ON equipment_location.id = source_equipment.location_id
+          WHERE a.id = %s AND a.site_id = %s
+          FOR UPDATE OF a
+      """,
+      (id, g.current_site["id"]),
+  )
+  source = cur.fetchone()
+  if source is None:
+    cur.close()
+    abort(404, description="Article source introuvable.")
+
+  target_site_id = form_integer("target_site_id", minimum=1)
+  target_location_id = optional_integer(
+      request.form.get("target_location_id"), "target_location_id"
+  )
+  if operation == "transfer":
+    quantity = form_integer("quantity", minimum=1)
+    if quantity > source["quantity"]:
+      db.rollback()
+      cur.close()
+      abort(400, description="La quantité à déplacer dépasse le stock disponible.")
+  else:
+    quantity = 0
+
+  cur.execute(
+      "SELECT id, name FROM sites WHERE id = %s FOR UPDATE",
+      (target_site_id,),
+  )
+  target_site = cur.fetchone()
+  if target_site is None:
+    db.rollback()
+    cur.close()
+    abort(400, description="Le site de destination n’existe pas.")
+
+  if target_location_id is not None:
+    cur.execute(
+        "SELECT id, name FROM locations WHERE id = %s AND site_id = %s",
+        (target_location_id, target_site_id),
+    )
+    target_location = cur.fetchone()
+    if target_location is None:
+      db.rollback()
+      cur.close()
+      abort(400, description="Le lieu de destination doit appartenir au site choisi.")
+    target_location_name = target_location["name"]
+  else:
+    target_location_name = "Non assigné"
+
+  if (
+      operation == "transfer"
+      and source["site_id"] == target_site_id
+      and source["effective_location_id"] == target_location_id
+  ):
+    db.rollback()
+    cur.close()
+    abort(400, description="L’article se trouve déjà dans ce lieu.")
+
+  cur.execute(
+      """
+          SELECT a.id
+          FROM articles a
+          LEFT JOIN equipment e ON e.id = a.equipment_id
+          WHERE a.site_id = %s
+            AND LOWER(a.name) = LOWER(%s)
+            AND a.reference IS NOT DISTINCT FROM %s
+            AND COALESCE(a.location_id, e.location_id)
+                IS NOT DISTINCT FROM %s
+          ORDER BY a.id
+          LIMIT 1
+          FOR UPDATE OF a
+      """,
+      (
+          target_site_id, source["name"], source["reference"],
+          target_location_id,
+      ),
+  )
+  destination = cur.fetchone()
+
+  if operation == "copy":
+    if destination:
+      db.rollback()
+      cur.close()
+      session["active_site_id"] = target_site_id
+      flash("Une fiche identique existe déjà à cet emplacement ; aucun doublon n’a été créé.", "success")
+      return redirect(url_for("edit_article", id=destination["id"]))
+    cur.execute(
+        """
+            INSERT INTO articles
+                (name, reference, quantity, price, is_estimated_price,
+                 min_threshold, supplier, invoice_number, entry_date,
+                 location_id, equipment_id, image_filename, site_id)
+            VALUES (%s, %s, 0, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)
+            RETURNING id
+        """,
+        (
+            source["name"], source["reference"], source["price"],
+            source["is_estimated_price"], source["min_threshold"],
+            source["supplier"], source["invoice_number"], source["entry_date"],
+            target_location_id, source["image_filename"], target_site_id,
+        ),
+    )
+    destination_article_id = cur.fetchone()["id"]
+    db.commit()
+    cur.close()
+    session["active_site_id"] = target_site_id
+    flash("Fiche copiée. Le stock de la nouvelle fiche est à zéro.", "success")
+    return redirect(url_for("edit_article", id=destination_article_id))
+
+  destination_site_name = target_site["name"]
+  source_location_name = source["source_location_name"] or "Non assigné"
+  source_site_name = g.current_site["name"]
+  if destination:
+    destination_article_id = destination["id"]
+    cur.execute(
+        "UPDATE articles SET quantity = quantity + %s WHERE id = %s",
+        (quantity, destination_article_id),
+    )
+  else:
+    cur.execute(
+        """
+            INSERT INTO articles
+                (name, reference, quantity, price, is_estimated_price,
+                 min_threshold, supplier, invoice_number, entry_date,
+                 location_id, equipment_id, image_filename, site_id)
+            VALUES (%s, %s, 0, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)
+            RETURNING id
+        """,
+        (
+            source["name"], source["reference"], source["price"],
+            source["is_estimated_price"], source["min_threshold"],
+            source["supplier"], source["invoice_number"], source["entry_date"],
+            target_location_id, source["image_filename"], target_site_id,
+        ),
+    )
+    destination_article_id = cur.fetchone()["id"]
+    cur.execute(
+        "UPDATE articles SET quantity = quantity + %s WHERE id = %s",
+        (quantity, destination_article_id),
+    )
+
+  cur.execute(
+      "UPDATE articles SET quantity = quantity - %s WHERE id = %s",
+      (quantity, id),
+  )
+  cur.execute(
+      """
+          INSERT INTO movements
+              (article_id, performed_by_user_id, type, quantity, unit_price,
+               unit_price_estimated, reason, date)
+          VALUES (%s, %s, 'SORTIE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
+      """,
+      (
+          id, g.current_user["id"], quantity, source["price"] or 0.0,
+          bool(source["is_estimated_price"]),
+          f"Transfert vers {destination_site_name} · {target_location_name}",
+      ),
+  )
+  cur.execute(
+      """
+          INSERT INTO movements
+              (article_id, performed_by_user_id, type, quantity, unit_price,
+               unit_price_estimated, reason, date)
+          VALUES (%s, %s, 'ENTREE', %s, %s, %s, %s, CURRENT_TIMESTAMP)
+      """,
+      (
+          destination_article_id, g.current_user["id"], quantity,
+          source["price"] or 0.0, bool(source["is_estimated_price"]),
+          f"Transfert depuis {source_site_name} · {source_location_name}",
+      ),
+  )
+  db.commit()
+  cur.close()
+  session["active_site_id"] = target_site_id
+  flash(
+      f"{quantity} unité(s) transférée(s) vers {destination_site_name} · {target_location_name}.",
+      "success",
+  )
+  return redirect(url_for("edit_article", id=destination_article_id))
 
 
 @app.route("/delete/<int:id>", methods=["POST"])
