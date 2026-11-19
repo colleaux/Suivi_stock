@@ -1906,7 +1906,7 @@ MONTHLY_CLOSE_TEMPLATE = (
                         <tr class="{% if item.status == 'À vérifier' %}bg-rose-50{% elif item.status != 'OK' %}bg-amber-50{% else %}hover:bg-slate-50{% endif %}">
                             <td class="whitespace-nowrap p-2 font-semibold {% if item.status == 'À vérifier' %}text-rose-800{% elif item.status != 'OK' %}text-amber-800{% else %}text-emerald-800{% endif %}">{{ item.status }}</td>
                             <td class="whitespace-nowrap p-2 font-mono">{{ item.reference or '—' }}</td>
-                            <td class="p-2 font-semibold text-slate-900">{{ item.name }}<span class="ml-1 whitespace-nowrap text-[10px] font-normal text-slate-500">(ID {{ item.id }})</span>{% if item.issues %}<span class="mt-1 block whitespace-normal text-[10px] font-normal text-rose-800">{{ item.issues }}</span>{% endif %}</td>
+                            <td class="p-2 font-semibold text-slate-900">{{ item.name }}<span class="ml-1 whitespace-nowrap text-[10px] font-normal text-slate-500">(ID {{ item.id }})</span></td>
                             <td class="p-2">{{ item.location_name }}<span class="block text-slate-500">{{ item.equipment_name or 'Équipement non renseigné' }}</span></td>
                             <td class="p-2 text-right">{{ item.entries_quantity }}</td>
                             <td class="whitespace-nowrap p-2 text-right">{% if item.entries_value is not none %}{{ "%.2f"|format(item.entries_value) }} €{% else %}—{% endif %}</td>
@@ -2530,10 +2530,6 @@ def build_monthly_close_rows(
           state["estimated"] = True
           if in_period:
             state["entries_estimated"] = True
-          add_issue(
-              state,
-              "Prix d'entrée absent ; valorisation estimée au dernier prix connu.",
-          )
         if estimate_status is True:
           state["estimated"] = True
           if in_period:
@@ -2542,11 +2538,6 @@ def build_monthly_close_rows(
           state["estimate_status_unknown"] = True
           if movement_date < period_end:
             state["legacy_price_status_seen"] = True
-          if movement_date < period_end:
-            add_issue(
-                state,
-                "Caractère estimatif d'un prix d'entrée ancien non historisé.",
-            )
           if in_period:
             state["entries_estimated"] = True
         if used_fallback_price:
