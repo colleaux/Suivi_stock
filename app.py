@@ -1805,7 +1805,31 @@ MONTHLY_CLOSE_TEMPLATE = (
             .closing-table th, .closing-table td { padding: 4px !important; }
             .closing-table thead { display: table-header-group; }
             .closing-table tr { break-inside: avoid; }
-            .closing-section { break-inside: auto; }
+            .closing-summary {
+                display: table !important;
+                width: 100%;
+                table-layout: fixed;
+                border-collapse: separate;
+                border-spacing: 8px;
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            .closing-summary-card {
+                display: table-cell !important;
+                width: 25%;
+                break-inside: avoid;
+                page-break-inside: avoid;
+                vertical-align: top;
+            }
+            .closing-section {
+                overflow: visible !important;
+                break-inside: auto;
+                page-break-inside: auto;
+            }
+            .closing-section > div:first-child {
+                break-after: avoid;
+                page-break-after: avoid;
+            }
             body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
     </style>
@@ -1825,6 +1849,7 @@ MONTHLY_CLOSE_TEMPLATE = (
                         <button type="submit" class="min-h-11 rounded bg-emerald-500 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-600">Afficher</button>
                     </form>
                     <button type="button" onclick="window.print()" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Imprimer / PDF</button>
+                    <a href="{{ url_for('monthly_close', month=month_key, view='locations') }}" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Synthèse par lieu</a>
                 </div>
             </div>
             <p class="mt-4 rounded-lg border border-emerald-700 bg-emerald-950/40 p-3 text-xs leading-relaxed text-emerald-100">
@@ -1853,23 +1878,23 @@ MONTHLY_CLOSE_TEMPLATE = (
         </section>
         {% endif %}
 
-        <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <section class="closing-summary grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="closing-summary-card rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <p class="text-xs font-semibold uppercase text-slate-500">Stock d’ouverture · CUMP</p>
                 <p class="mt-1 text-xl font-extrabold text-slate-900">{{ "%.2f"|format(opening_value) }} €</p>
                 {% if opening_unvalued_count or unverified_count or orphaned_movement_count %}<p class="mt-1 text-xs text-amber-800">Partiel · {{ opening_unvalued_count }} non valorisé(s), {{ unverified_count }} à vérifier</p>{% endif %}
             </div>
-            <div class="rounded-lg border border-emerald-200 bg-white p-4 shadow-sm">
+            <div class="closing-summary-card rounded-lg border border-emerald-200 bg-white p-4 shadow-sm">
                 <p class="text-xs font-semibold uppercase text-slate-500">Entrées du mois</p>
                 <p class="mt-1 text-xl font-extrabold text-emerald-900">{{ "%.2f"|format(entries_value) }} €</p>
                 <p class="mt-1 text-xs text-slate-600">{{ entries_quantity }} unité(s){% if entries_unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
             </div>
-            <div class="rounded-lg border border-amber-200 bg-white p-4 shadow-sm">
+            <div class="closing-summary-card rounded-lg border border-amber-200 bg-white p-4 shadow-sm">
                 <p class="text-xs font-semibold uppercase text-slate-500">Sorties du mois · CUMP</p>
                 <p class="mt-1 text-xl font-extrabold text-amber-900">{{ "%.2f"|format(exits_value) }} €</p>
                 <p class="mt-1 text-xs text-slate-600">{{ exits_quantity }} unité(s){% if exits_unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
             </div>
-            <div class="rounded-lg border border-forest bg-white p-4 shadow-sm">
+            <div class="closing-summary-card rounded-lg border border-forest bg-white p-4 shadow-sm">
                 <p class="text-xs font-semibold uppercase text-slate-500">Stock de clôture · CUMP</p>
                 <p class="mt-1 text-xl font-extrabold text-forest">{{ "%.2f"|format(closing_value) }} €</p>
                 <p class="mt-1 text-xs text-slate-600">{{ closing_quantity }} unité(s){% if unvalued_count or unverified_count or orphaned_movement_count %} · total partiel{% endif %}</p>
@@ -1940,6 +1965,77 @@ MONTHLY_CLOSE_TEMPLATE = (
             Le statut « À vérifier » signale notamment un mouvement de sortie sans solde antérieur documenté ou un écart avec le stock actuel.
             Les anciens prix estimatifs ne sont pas toujours identifiables. Les prix proviennent d’un type numérique flottant et les montants sont arrondis à deux décimales à l’affichage ; vérifiez les justificatifs et la règle de valorisation comptable avant validation.
         </p>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
+
+# --- MONTHLY STOCK SUMMARY BY LOCATION ---
+MONTHLY_LOCATION_SUMMARY_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <style>
+        .location-summary-table { min-width: 420px; }
+        @media print {
+            @page { size: landscape; margin: 12mm; }
+            .location-summary-table { min-width: 0 !important; font-size: 9pt !important; }
+            .location-summary-table th, .location-summary-table td { padding: 6px !important; }
+            .location-summary-table thead { display: table-header-group; }
+            .location-summary-table tr { break-inside: avoid; page-break-inside: avoid; }
+            .location-summary-section { overflow: visible !important; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+    </style>
+    <div class="mx-auto max-w-7xl space-y-5">
+        <section class="rounded-xl bg-forest p-5 text-white shadow-sm sm:p-6">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Synthèse mensuelle · {{ g.current_site.name }}</p>
+                    <h1 class="mt-1 text-2xl font-extrabold">Stocks par lieu de stockage</h1>
+                    <p class="mt-2 text-sm text-emerald-100">Période : {{ period_label }} · du {{ period_start_label }} au {{ period_end_label }}</p>
+                    {% if current_month %}<p class="mt-2 inline-flex rounded bg-amber-300 px-2 py-1 text-xs font-bold text-amber-950">Période en cours · état provisoire</p>{% endif %}
+                </div>
+                <div class="no-print flex flex-wrap gap-2">
+                    <button type="button" onclick="window.print()" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Imprimer / PDF</button>
+                    <a href="{{ url_for('monthly_close', month=month_key) }}" class="min-h-11 rounded border border-white/40 px-4 py-2 text-sm font-bold text-white hover:bg-white/10">Retour à l’état mensuel</a>
+                </div>
+            </div>
+            <p class="mt-3 text-right text-[11px] text-emerald-200">Édité le {{ generated_at }}</p>
+        </section>
+
+        <section class="location-summary-section overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-200 p-4">
+                <h2 class="font-bold text-slate-900">Synthèse par lieu</h2>
+                <p class="mt-1 text-xs text-slate-600">Valeur du stock de clôture par lieu · une valeur incomplète est signalée « Partiel ».</p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="location-summary-table w-full border-collapse text-left text-xs">
+                    <thead class="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
+                        <tr>
+                            <th class="p-3">Lieu de stockage</th>
+                            <th class="p-3 text-right">Valeur du stock</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for item in location_summary_rows %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="p-3 font-semibold text-slate-900">{{ item.location_name }}</td>
+                            <td class="whitespace-nowrap p-3 text-right font-bold">{% if item.closing_value is not none %}{{ "%.2f"|format(item.closing_value) }} €{% else %}Partiel{% endif %}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="2" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-900">
+                        <tr>
+                            <td class="p-3">Valeur totale du site</td>
+                            <td class="whitespace-nowrap p-3 text-right">{% if location_summary_totals is not none %}{{ "%.2f"|format(location_summary_totals) }} €{% else %}Partiel{% endif %}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </section>
+        <p class="text-xs text-slate-500">Valeurs de clôture calculées selon la méthode CUMP de l’état mensuel.</p>
     </div>
 """
     + LAYOUT_FOOTER
@@ -2741,6 +2837,37 @@ def build_monthly_close_rows(
   return rows, totals
 
 
+def build_monthly_location_summaries(monthly_close_rows):
+  summaries = {}
+  total_value = Decimal("0")
+  total_value_complete = True
+  for row in monthly_close_rows:
+    location_name = row["location_name"] or "Non assigné"
+    summary = summaries.setdefault(
+        location_name,
+        {"location_name": location_name, "closing_value": Decimal("0"), "complete": True},
+    )
+    closing_quantity = row["closing_quantity"]
+    closing_value = row["closing_value"]
+    if closing_quantity is None or (
+        closing_quantity > 0 and closing_value is None
+    ):
+      summary["complete"] = False
+      total_value_complete = False
+      continue
+    if closing_value is not None:
+      summary["closing_value"] += closing_value
+      total_value += closing_value
+
+  for summary in summaries.values():
+    if not summary["complete"]:
+      summary["closing_value"] = None
+
+  return sorted(
+      summaries.values(), key=lambda summary: summary["location_name"].casefold()
+  ), total_value if total_value_complete else None
+
+
 @app.route("/")
 def home():
   cur = get_db().cursor()
@@ -3219,6 +3346,24 @@ def monthly_close():
   duplicate_name_count = sum(
       count > 1 for count in article_name_counts.values()
   )
+
+  if request.args.get("view") == "locations":
+    location_summary_rows, location_summary_totals = (
+        build_monthly_location_summaries(monthly_close_rows)
+    )
+    return render_template_string(
+        MONTHLY_LOCATION_SUMMARY_TEMPLATE,
+        active_page="monthly_close",
+        total_stock_value=calculate_total_stock_value(),
+        location_summary_rows=location_summary_rows,
+        location_summary_totals=location_summary_totals,
+        month_key=month_key,
+        period_label=period_label,
+        period_start_label=month_start_date.strftime("%d/%m/%Y"),
+        period_end_label=period_end_date.strftime("%d/%m/%Y"),
+        generated_at=datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
+        current_month=month_start_date == current_month_start,
+    )
 
   return render_template_string(
       MONTHLY_CLOSE_TEMPLATE,
