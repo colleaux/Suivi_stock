@@ -2006,7 +2006,7 @@ MONTHLY_LOCATION_SUMMARY_TEMPLATE = (
         <section class="location-summary-section overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div class="border-b border-slate-200 p-4">
                 <h2 class="font-bold text-slate-900">Synthèse par lieu</h2>
-                <p class="mt-1 text-xs text-slate-600">Valeur du stock de clôture par lieu · une valeur incomplète est signalée « Partiel ».</p>
+                <p class="mt-1 text-xs text-slate-600">Valeur du stock par lieu · « ≈ » indique une estimation lorsque l’historique ne permet pas de reconstituer la clôture.</p>
             </div>
             <div class="overflow-x-auto">
                 <table class="location-summary-table w-full border-collapse text-left text-xs">
@@ -2020,7 +2020,7 @@ MONTHLY_LOCATION_SUMMARY_TEMPLATE = (
                         {% for item in location_summary_rows %}
                         <tr class="hover:bg-slate-50">
                             <td class="p-3 font-semibold text-slate-900">{{ item.location_name }}</td>
-                            <td class="whitespace-nowrap p-3 text-right font-bold">{% if item.closing_value is not none %}{{ "%.2f"|format(item.closing_value) }} €{% else %}Partiel{% endif %}</td>
+                            <td class="whitespace-nowrap p-3 text-right font-bold">{% if item.estimated %}≈ {% endif %}{{ "%.2f"|format(item.closing_value) }} €</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="2" class="p-8 text-center text-slate-500">Aucun article à présenter.</td></tr>
@@ -2029,13 +2029,13 @@ MONTHLY_LOCATION_SUMMARY_TEMPLATE = (
                     <tfoot class="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-900">
                         <tr>
                             <td class="p-3">Valeur totale du site</td>
-                            <td class="whitespace-nowrap p-3 text-right">{% if location_summary_totals is not none %}{{ "%.2f"|format(location_summary_totals) }} €{% else %}Partiel{% endif %}</td>
+                            <td class="whitespace-nowrap p-3 text-right">{% if location_summary_totals_estimated %}≈ {% endif %}{{ "%.2f"|format(location_summary_totals) }} €</td>
                         </tr>
                     </tfoot>
                 </table>
             </div>
         </section>
-        <p class="text-xs text-slate-500">Valeurs de clôture calculées selon la méthode CUMP de l’état mensuel.</p>
+        <p class="text-xs text-slate-500">Pour les articles dont la clôture historique est incomplète, la valeur est estimée à partir de la quantité disponible et du prix actuel de la fiche.</p>
     </div>
 """
     + LAYOUT_FOOTER
@@ -2738,6 +2738,8 @@ def build_monthly_close_rows(
             "id": article_id,
             "reference": article.get("reference"),
             "name": article["name"],
+            "current_quantity": article["current_quantity"],
+            "current_price": article.get("current_price"),
             "location_name": location_name,
             "equipment_name": article.get("eq_name"),
             "opening_quantity": opening["quantity"],
@@ -2840,32 +2842,39 @@ def build_monthly_close_rows(
 def build_monthly_location_summaries(monthly_close_rows):
   summaries = {}
   total_value = Decimal("0")
-  total_value_complete = True
+  total_estimated = False
   for row in monthly_close_rows:
     location_name = row["location_name"] or "Non assigné"
     summary = summaries.setdefault(
         location_name,
-        {"location_name": location_name, "closing_value": Decimal("0"), "complete": True},
+        {
+            "location_name": location_name,
+            "closing_value": Decimal("0"),
+            "estimated": False,
+        },
     )
-    closing_quantity = row["closing_quantity"]
     closing_value = row["closing_value"]
-    if closing_quantity is None or (
-        closing_quantity > 0 and closing_value is None
-    ):
-      summary["complete"] = False
-      total_value_complete = False
-      continue
-    if closing_value is not None:
-      summary["closing_value"] += closing_value
-      total_value += closing_value
-
-  for summary in summaries.values():
-    if not summary["complete"]:
-      summary["closing_value"] = None
+    estimated = row["status"] != "OK"
+    if closing_value is None:
+      quantity = row["closing_quantity"]
+      if quantity is None:
+        quantity = row["current_quantity"]
+      try:
+        price = Decimal(str(row["current_price"]))
+      except (InvalidOperation, TypeError, ValueError):
+        price = Decimal("0")
+      if not price.is_finite() or price < 0:
+        price = Decimal("0")
+      closing_value = Decimal(quantity) * price
+      estimated = True
+    summary["closing_value"] += closing_value
+    summary["estimated"] = summary["estimated"] or estimated
+    total_value += closing_value
+    total_estimated = total_estimated or estimated
 
   return sorted(
       summaries.values(), key=lambda summary: summary["location_name"].casefold()
-  ), total_value if total_value_complete else None
+  ), total_value, total_estimated
 
 
 @app.route("/")
@@ -3260,6 +3269,7 @@ def monthly_close():
   cur = db.cursor()
   cur.execute("""
       SELECT a.id, a.name, a.reference, a.quantity AS current_quantity,
+             a.price AS current_price,
              COALESCE(
                  (
                      SELECT m.unit_price
@@ -3348,7 +3358,11 @@ def monthly_close():
   )
 
   if request.args.get("view") == "locations":
-    location_summary_rows, location_summary_totals = (
+    (
+        location_summary_rows,
+        location_summary_totals,
+        location_summary_totals_estimated,
+    ) = (
         build_monthly_location_summaries(monthly_close_rows)
     )
     return render_template_string(
@@ -3357,6 +3371,7 @@ def monthly_close():
         total_stock_value=calculate_total_stock_value(),
         location_summary_rows=location_summary_rows,
         location_summary_totals=location_summary_totals,
+        location_summary_totals_estimated=location_summary_totals_estimated,
         month_key=month_key,
         period_label=period_label,
         period_start_label=month_start_date.strftime("%d/%m/%Y"),
