@@ -806,8 +806,9 @@ def forgot_password():
           )
         except (RuntimeError, OSError, smtplib.SMTPException) as error:
           app.logger.warning(
-              "Could not deliver a password reset email (%s).",
+              "Could not deliver a password reset email (%s): %s",
               type(error).__name__,
+              error,
           )
     message = (
         "Si cette adresse correspond à un compte actif, un lien sera envoyé "
@@ -4070,8 +4071,9 @@ def add_user():
     )
   except (RuntimeError, OSError, smtplib.SMTPException) as error:
     app.logger.warning(
-        "Could not deliver a new-user password email (%s).",
+        "Could not deliver a new-user password email (%s): %s",
         type(error).__name__,
+        error,
     )
     flash(
         f"Le compte « {username} » a été créé, mais l'e-mail n'a pas pu être envoyé. "
@@ -4138,8 +4140,9 @@ def reset_user_password(user_id):
     )
   except (RuntimeError, OSError, smtplib.SMTPException) as error:
     app.logger.warning(
-        "Could not deliver an administrator-requested password email (%s).",
+        "Could not deliver an administrator-requested password email (%s): %s",
         type(error).__name__,
+        error,
     )
     flash("L'e-mail n'a pas pu être envoyé. Vérifiez la configuration SMTP.", "error")
     return redirect(url_for("settings_view"))
@@ -4188,8 +4191,9 @@ def update_user_email(user_id):
     )
   except (RuntimeError, OSError, smtplib.SMTPException) as error:
     app.logger.warning(
-        "Could not deliver an updated-user password email (%s).",
+        "Could not deliver an updated-user password email (%s): %s",
         type(error).__name__,
+        error,
     )
     flash(
         "L'adresse a été enregistrée, mais l'e-mail n'a pas pu être envoyé. "
