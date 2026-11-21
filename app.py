@@ -1,5 +1,6 @@
 import base64
 import datetime
+import hashlib
 import hmac
 import io
 import math
@@ -7,14 +8,18 @@ import mimetypes
 import os
 import re
 import secrets
+import smtplib
+import ssl
 import warnings
 from decimal import Decimal, InvalidOperation
+from email.message import EmailMessage
+from urllib.parse import urlparse
 
 import psycopg
 import qrcode
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from psycopg.rows import dict_row
 from flask import (
     Flask,
@@ -24,7 +29,6 @@ from flask import (
     redirect,
     render_template_string,
     request,
-    send_from_directory,
     session,
     url_for,
 )
@@ -109,6 +113,9 @@ LOGIN_TEMPLATE = """
     <main class="w-full max-w-sm bg-white rounded-lg shadow p-6">
         <h1 class="text-lg font-bold text-slate-900 mb-5">Connexion au suivi de stock</h1>
         {% if error %}<p role="alert" class="text-sm text-rose-700 mb-4">{{ error }}</p>{% endif %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+        <p role="status" class="text-sm mb-4 {% if category == 'error' %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ message }}</p>
+        {% endfor %}
         <form method="POST" class="space-y-4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label class="block text-sm font-medium text-slate-700">
@@ -121,6 +128,72 @@ LOGIN_TEMPLATE = """
             </label>
             <button type="submit" class="w-full bg-emerald-900 text-white rounded p-2 font-semibold">Se connecter</button>
         </form>
+        <p class="mt-4 text-center text-sm"><a class="text-emerald-800 underline" href="{{ url_for('forgot_password') }}">Créer ou réinitialiser mon mot de passe</a></p>
+    </main>
+</body>
+</html>
+"""
+
+PASSWORD_EMAIL_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - Suivi Inventaire</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <main class="w-full max-w-sm bg-white rounded-lg shadow p-6">
+        <h1 class="text-lg font-bold text-slate-900 mb-4">{{ title }}</h1>
+        {% if message %}<p role="status" class="text-sm text-emerald-800 mb-4">{{ message }}</p>{% endif %}
+        {% if error %}<p role="alert" class="text-sm text-rose-700 mb-4">{{ error }}</p>{% endif %}
+        {% if show_form %}
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="block text-sm font-medium text-slate-700">
+                Adresse e-mail du compte
+                <input type="email" name="email" autocomplete="email" required maxlength="254" class="mt-1 w-full border rounded p-2">
+            </label>
+            <button type="submit" class="w-full bg-emerald-900 text-white rounded p-2 font-semibold">Recevoir un lien</button>
+        </form>
+        {% endif %}
+        <p class="mt-4 text-center text-sm"><a class="text-emerald-800 underline" href="{{ url_for('login') }}">Retour à la connexion</a></p>
+    </main>
+</body>
+</html>
+"""
+
+PASSWORD_RESET_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Choisir un mot de passe - Suivi Inventaire</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <main class="w-full max-w-sm bg-white rounded-lg shadow p-6">
+        <h1 class="text-lg font-bold text-slate-900 mb-4">Choisir un nouveau mot de passe</h1>
+        {% if error %}<p role="alert" class="text-sm text-rose-700 mb-4">{{ error }}</p>{% endif %}
+        {% if valid_link %}
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="block text-sm font-medium text-slate-700">
+                Nouveau mot de passe (12 caractères minimum)
+                <input type="password" name="password" autocomplete="new-password" minlength="12" required class="mt-1 w-full border rounded p-2">
+            </label>
+            <label class="block text-sm font-medium text-slate-700">
+                Confirmer le mot de passe
+                <input type="password" name="password_confirmation" autocomplete="new-password" minlength="12" required class="mt-1 w-full border rounded p-2">
+            </label>
+            <button type="submit" class="w-full bg-emerald-900 text-white rounded p-2 font-semibold">Enregistrer le mot de passe</button>
+        </form>
+        {% else %}
+        <p class="text-sm text-slate-700">Ce lien est invalide, expiré ou déjà utilisé. Demandez un nouveau lien de réinitialisation.</p>
+        <p class="mt-4 text-sm"><a class="text-emerald-800 underline" href="{{ url_for('forgot_password') }}">Demander un nouveau lien</a></p>
+        {% endif %}
     </main>
 </body>
 </html>
@@ -203,10 +276,7 @@ def allowed_file(filename):
   return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-@app.route("/uploads/<path:filename>")
-def uploaded_file(filename):
-  if "/" in filename or "\\" in filename or filename in {".", ".."}:
-    abort(404)
+def read_uploaded_image(filename):
   if R2_ENABLED:
     try:
       response = R2_CLIENT.get_object(Bucket=R2_BUCKET_NAME, Key=filename)
@@ -214,16 +284,8 @@ def uploaded_file(filename):
         image_data = response["Body"].read()
       finally:
         response["Body"].close()
-      content_type = response.get("ContentType") or mimetypes.guess_type(filename)[0]
-      if not content_type:
-        content_type = "application/octet-stream"
-      image_response = app.response_class(
-          image_data,
-          mimetype=content_type,
-          direct_passthrough=False,
-      )
-      image_response.headers["Cache-Control"] = "private, max-age=3600"
-      return image_response
+      content_type = response.get("ContentType")
+      return image_data, content_type or mimetypes.guess_type(filename)[0]
     except ClientError as error:
       error_code = error.response.get("Error", {}).get("Code")
       status_code = error.response.get("ResponseMetadata", {}).get(
@@ -234,30 +296,133 @@ def uploaded_file(filename):
         abort(502, description="La photo ne peut pas être récupérée depuis R2.")
       local_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
       if not os.path.isfile(local_path):
-        abort(404)
+        return None
       try:
         with open(local_path, "rb") as image_file:
           image_data = image_file.read()
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         R2_CLIENT.put_object(
             Bucket=R2_BUCKET_NAME,
             Key=filename,
             Body=image_data,
-            ContentType=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+            ContentType=content_type,
         )
+        return image_data, content_type
       except (OSError, BotoCoreError):
         app.logger.exception("Could not migrate local image to R2: %s", filename)
         abort(502, description="La photo locale n'a pas pu être transférée vers R2.")
-      local_response = app.response_class(
-          image_data,
-          mimetype=mimetypes.guess_type(filename)[0] or "application/octet-stream",
-          direct_passthrough=False,
-      )
-      local_response.headers["Cache-Control"] = "private, max-age=3600"
-      return local_response
     except BotoCoreError:
       app.logger.exception("R2 image retrieval failed for %s", filename)
       abort(502, description="La photo ne peut pas être récupérée depuis R2.")
-  return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+  local_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+  if not os.path.isfile(local_path):
+    return None
+  try:
+    with open(local_path, "rb") as image_file:
+      image_data = image_file.read()
+  except OSError:
+    app.logger.exception("Local image retrieval failed for %s", filename)
+    abort(500, description="La photo locale ne peut pas être lue.")
+  return image_data, mimetypes.guess_type(filename)[0]
+
+
+def store_uploaded_image(filename, image_data, content_type):
+  if R2_ENABLED:
+    try:
+      R2_CLIENT.put_object(
+          Bucket=R2_BUCKET_NAME,
+          Key=filename,
+          Body=image_data,
+          ContentType=content_type,
+      )
+    except BotoCoreError:
+      app.logger.exception("R2 image upload failed for %s.", filename)
+      abort(502, description="La photo n'a pas pu être enregistrée dans R2.")
+    return
+  try:
+    with open(os.path.join(app.config["UPLOAD_FOLDER"], filename), "wb") as image_file:
+      image_file.write(image_data)
+  except OSError:
+    app.logger.exception("Local image storage failed for %s.", filename)
+    abort(500, description="La photo n'a pas pu être enregistrée sur le serveur.")
+
+
+def optimize_image(image_data, image_format, max_dimension=None):
+  with warnings.catch_warnings():
+    warnings.simplefilter("error", Image.DecompressionBombWarning)
+    image = Image.open(io.BytesIO(image_data))
+    image = ImageOps.exif_transpose(image)
+    image.load()
+  if max_dimension:
+    image.thumbnail(
+        (max_dimension, max_dimension),
+        Image.Resampling.LANCZOS,
+    )
+
+  output = io.BytesIO()
+  if image_format == "JPEG":
+    if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+      rgba = image.convert("RGBA")
+      background = Image.new("RGB", rgba.size, "white")
+      background.paste(rgba, mask=rgba.getchannel("A"))
+      image = background
+    else:
+      image = image.convert("RGB")
+    image.save(
+        output, format="JPEG", quality=82, optimize=True, progressive=True
+    )
+  elif image_format == "WEBP":
+    image.save(output, format="WEBP", quality=82, method=6)
+  else:
+    image.save(output, format="PNG", optimize=True, compress_level=8)
+  return output.getvalue()
+
+
+def image_response(image_data, content_type):
+  response = app.response_class(
+      image_data,
+      mimetype=content_type or "application/octet-stream",
+      direct_passthrough=False,
+  )
+  response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+  response.set_etag(hashlib.sha256(image_data).hexdigest())
+  response.make_conditional(request)
+  return response
+
+
+@app.route("/uploads/<path:filename>")
+def uploaded_file(filename):
+  if "/" in filename or "\\" in filename or filename in {".", ".."}:
+    abort(404)
+  variant = request.args.get("variant", "")
+  if variant not in {"", "thumb"}:
+    abort(400, description="Format de photo demandé invalide.")
+  if variant == "thumb":
+    thumbnail_filename = f"{filename}.thumb.jpg"
+    stored_thumbnail = read_uploaded_image(thumbnail_filename)
+    if stored_thumbnail is None:
+      source = read_uploaded_image(filename)
+      if source is None:
+        abort(404)
+      try:
+        thumbnail_data = optimize_image(source[0], "JPEG", max_dimension=360)
+      except (
+          UnidentifiedImageError,
+          OSError,
+          Image.DecompressionBombError,
+          Image.DecompressionBombWarning,
+      ):
+        app.logger.exception("Could not create image thumbnail for %s.", filename)
+        abort(502, description="La vignette de la photo n'a pas pu être créée.")
+      store_uploaded_image(thumbnail_filename, thumbnail_data, "image/jpeg")
+      return image_response(thumbnail_data, "image/jpeg")
+    return image_response(stored_thumbnail[0], "image/jpeg")
+
+  image = read_uploaded_image(filename)
+  if image is None:
+    abort(404)
+  return image_response(image[0], image[1])
 
 
 def save_uploaded_image(upload):
@@ -284,20 +449,19 @@ def save_uploaded_image(upload):
   if image_format != expected_formats[extension]:
     abort(400, description="L'extension ne correspond pas au format de l'image.")
   filename = f"art_{secrets.token_hex(8)}_{secure_filename(upload.filename)}"
-  if R2_ENABLED:
-    try:
-      R2_CLIENT.put_object(
-          Bucket=R2_BUCKET_NAME,
-          Key=filename,
-          Body=image_data,
-          ContentType=f"image/{'jpeg' if extension in {'jpg', 'jpeg'} else extension}",
-      )
-    except BotoCoreError:
-      app.logger.exception("R2 image upload failed.")
-      abort(502, description="La photo n'a pas pu être enregistrée dans R2.")
-    return filename
-  with open(os.path.join(app.config["UPLOAD_FOLDER"], filename), "wb") as image_file:
-    image_file.write(image_data)
+  try:
+    optimized_data = optimize_image(image_data, image_format, max_dimension=1600)
+    thumbnail_data = optimize_image(image_data, "JPEG", max_dimension=360)
+  except (
+      UnidentifiedImageError,
+      OSError,
+      Image.DecompressionBombError,
+      Image.DecompressionBombWarning,
+  ):
+    abort(400, description="La photo n'a pas pu être optimisée.")
+  content_type = f"image/{'jpeg' if extension in {'jpg', 'jpeg'} else extension}"
+  store_uploaded_image(filename, optimized_data, content_type)
+  store_uploaded_image(f"{filename}.thumb.jpg", thumbnail_data, "image/jpeg")
   return filename
 
 
@@ -385,6 +549,145 @@ def hash_password(password):
   return generate_password_hash(password, method=PASSWORD_HASH_METHOD)
 
 
+def smtp_configuration():
+  host = os.environ.get("SMTP_HOST", "").strip()
+  sender = os.environ.get("SMTP_FROM", "").strip()
+  if not host or not sender:
+    raise RuntimeError("Configurez SMTP_HOST et SMTP_FROM pour activer l'envoi d'e-mails.")
+  if not is_valid_email_address(sender):
+    raise RuntimeError("SMTP_FROM doit être une adresse e-mail valide.")
+  try:
+    port = int(os.environ.get("SMTP_PORT", "587"))
+  except ValueError as error:
+    raise RuntimeError("SMTP_PORT doit être un nombre.") from error
+  if not 1 <= port <= 65535:
+    raise RuntimeError("SMTP_PORT doit être compris entre 1 et 65535.")
+
+  username = os.environ.get("SMTP_USERNAME", "")
+  password = os.environ.get("SMTP_PASSWORD", "")
+  if bool(username) != bool(password):
+    raise RuntimeError("SMTP_USERNAME et SMTP_PASSWORD doivent être définis ensemble.")
+  ssl_value = os.environ.get("SMTP_USE_SSL", "false").strip().lower()
+  tls_value = os.environ.get(
+      "SMTP_USE_TLS", "false" if ssl_value == "true" else "true"
+  ).strip().lower()
+  if ssl_value not in {"true", "false"} or tls_value not in {"true", "false"}:
+    raise RuntimeError("SMTP_USE_SSL et SMTP_USE_TLS doivent valoir true ou false.")
+  use_ssl = ssl_value == "true"
+  use_tls = tls_value == "true"
+  if use_ssl and use_tls:
+    raise RuntimeError("Activez SMTP_USE_SSL ou SMTP_USE_TLS, mais pas les deux.")
+  if not use_ssl and not use_tls:
+    raise RuntimeError("L'envoi SMTP doit être protégé par TLS ou SSL.")
+  return {
+      "host": host,
+      "port": port,
+      "sender": sender,
+      "username": username,
+      "password": password,
+      "use_ssl": use_ssl,
+      "use_tls": use_tls,
+  }
+
+
+def mail_sending_enabled():
+  try:
+    smtp_configuration()
+  except RuntimeError:
+    return False
+  return True
+
+
+def send_password_email(recipient, username, reset_url, action):
+  config = smtp_configuration()
+  message = EmailMessage()
+  message["Subject"] = "Suivi de stock - " + action
+  message["From"] = config["sender"]
+  message["To"] = recipient
+  message.set_content(
+      f"""Bonjour {username},
+
+Utilisez le lien ci-dessous pour {action.lower()} votre mot de passe :
+{reset_url}
+
+Ce lien est valable une heure et ne peut être utilisé qu'une seule fois.
+Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.
+
+L'équipe Suivi de stock
+"""
+  )
+
+  smtp_class = smtplib.SMTP_SSL if config["use_ssl"] else smtplib.SMTP
+  with smtp_class(
+      config["host"],
+      config["port"],
+      timeout=15,
+      **({"context": ssl.create_default_context()} if config["use_ssl"] else {}),
+  ) as server:
+    if config["use_tls"]:
+      server.starttls(context=ssl.create_default_context())
+    if config["username"]:
+      server.login(config["username"], config["password"])
+    server.send_message(message)
+
+
+def issue_password_link(user_id, recipient, username, action):
+  smtp_configuration()
+  base_url = urlparse(APP_BASE_URL)
+  if (
+      base_url.scheme != "https"
+      or not base_url.netloc
+      or base_url.username
+      or base_url.password
+      or base_url.query
+      or base_url.fragment
+  ):
+    raise RuntimeError("APP_BASE_URL doit être une adresse HTTPS publique valide.")
+  token = secrets.token_urlsafe(32)
+  token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+  db = get_db()
+  cur = db.cursor()
+  cur.execute(
+      """
+          SELECT id FROM password_reset_tokens
+          WHERE user_id = %s
+            AND used_at IS NULL
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 minute'
+          LIMIT 1
+      """,
+      (user_id,),
+  )
+  if cur.fetchone():
+    cur.close()
+    return False
+
+  cur.execute(
+      "DELETE FROM password_reset_tokens WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL"
+  )
+  cur.execute("DELETE FROM password_reset_tokens WHERE user_id = %s", (user_id,))
+  cur.execute(
+      """
+          INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+          VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '1 hour')
+      """,
+      (user_id, token_hash),
+  )
+  db.commit()
+  cur.close()
+
+  reset_url = APP_BASE_URL + url_for("reset_password", token=token)
+  send_password_email(recipient, username, reset_url, action)
+  return True
+
+
+def is_valid_email_address(value):
+  return (
+      isinstance(value, str)
+      and len(value) <= 254
+      and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) is not None
+  )
+
+
 def csrf_token():
   token = session.get("_csrf_token")
   if token is None:
@@ -398,10 +701,11 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 @app.before_request
 def protect_requests():
-  if request.endpoint != "login" and not session.get("authenticated"):
+  public_endpoints = {"login", "forgot_password", "reset_password"}
+  if request.endpoint not in public_endpoints and not session.get("authenticated"):
     next_url = request.full_path if request.query_string else request.path
     return redirect(url_for("login", next=next_url))
-  if request.endpoint != "login" and session.get("authenticated"):
+  if request.endpoint not in public_endpoints and session.get("authenticated"):
     cur = get_db().cursor()
     cur.execute(
         "SELECT id, username, role FROM users WHERE id = %s AND active = TRUE",
@@ -461,7 +765,7 @@ def login():
     )
     user = cur.fetchone()
     cur.close()
-    if user and verify_password(user["password_hash"], password):
+    if user and user["password_hash"] and verify_password(user["password_hash"], password):
       if not user["password_hash"].startswith(PASSWORD_HASH_METHOD + "$"):
         cur = get_db().cursor()
         cur.execute(
@@ -477,6 +781,132 @@ def login():
       return redirect(url_for("choose_site"))
     error = "Identifiant ou mot de passe incorrect."
   return render_template_string(LOGIN_TEMPLATE, error=error, csrf_token=csrf_token())
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+  message = None
+  if request.method == "POST":
+    email = request.form.get("email", "").strip().lower()
+    if is_valid_email_address(email):
+      cur = get_db().cursor()
+      cur.execute(
+          "SELECT id, username, email FROM users WHERE email = %s AND active = TRUE",
+          (email,),
+      )
+      user = cur.fetchone()
+      cur.close()
+      if user:
+        try:
+          issue_password_link(
+              user["id"],
+              user["email"],
+              user["username"],
+              "Réinitialiser",
+          )
+        except (RuntimeError, OSError, smtplib.SMTPException) as error:
+          app.logger.warning(
+              "Could not deliver a password reset email (%s).",
+              type(error).__name__,
+          )
+    message = (
+        "Si cette adresse correspond à un compte actif, un lien sera envoyé "
+        "si un envoi est autorisé. Vérifiez également vos courriers indésirables."
+    )
+  return render_template_string(
+      PASSWORD_EMAIL_TEMPLATE,
+      title="Créer ou réinitialiser mon mot de passe",
+      message=message,
+      error=None,
+      show_form=True,
+      csrf_token=csrf_token(),
+  )
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+  token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          SELECT t.user_id FROM password_reset_tokens t
+          JOIN users u ON u.id = t.user_id
+          WHERE t.token_hash = %s
+            AND t.used_at IS NULL
+            AND t.expires_at > CURRENT_TIMESTAMP
+            AND u.active = TRUE
+      """,
+      (token_hash,),
+  )
+  valid_token = cur.fetchone() is not None
+  cur.close()
+
+  if request.method == "POST" and valid_token:
+    password = request.form.get("password", "")
+    confirmation = request.form.get("password_confirmation", "")
+    if len(password) < 12:
+      error = "Le mot de passe doit contenir au moins 12 caractères."
+    elif password != confirmation:
+      error = "Les deux mots de passe ne correspondent pas."
+    else:
+      db = get_db()
+      cur = db.cursor()
+      cur.execute(
+          """
+              UPDATE password_reset_tokens
+              SET used_at = CURRENT_TIMESTAMP
+              WHERE token_hash = %s
+                AND used_at IS NULL
+                AND expires_at > CURRENT_TIMESTAMP
+              RETURNING user_id
+          """,
+          (token_hash,),
+      )
+      token_row = cur.fetchone()
+      if token_row is None:
+        db.rollback()
+        cur.close()
+        valid_token = False
+        error = None
+      else:
+        cur.execute(
+            """
+                UPDATE users SET password_hash = %s
+                WHERE id = %s AND active = TRUE
+                RETURNING id
+            """,
+            (hash_password(password), token_row["user_id"]),
+        )
+        if cur.fetchone() is None:
+          db.rollback()
+          cur.close()
+          valid_token = False
+          error = None
+        else:
+          cur.execute(
+              "DELETE FROM password_reset_tokens WHERE user_id = %s",
+              (token_row["user_id"],),
+          )
+          db.commit()
+          cur.close()
+          session.clear()
+          flash("Votre mot de passe a été enregistré. Vous pouvez vous connecter.", "success")
+          response = redirect(url_for("login"))
+          response.headers["Cache-Control"] = "no-store"
+          response.headers["Referrer-Policy"] = "no-referrer"
+          return response
+  else:
+    error = None
+
+  response = app.make_response(render_template_string(
+      PASSWORD_RESET_TEMPLATE,
+      valid_link=valid_token,
+      error=error,
+      csrf_token=csrf_token(),
+  ))
+  response.headers["Cache-Control"] = "no-store"
+  response.headers["Referrer-Policy"] = "no-referrer"
+  return response
 
 
 @app.route("/logout", methods=["POST"])
@@ -639,7 +1069,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
+            email TEXT,
+            password_hash TEXT,
             role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
             active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -720,6 +1151,20 @@ def init_db():
   finally:
     cursor.execute("SELECT pg_advisory_unlock(73401219078123::bigint)")
   cursor.execute("""
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+        ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+            ON users (email) WHERE email IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            used_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_created
+            ON password_reset_tokens (user_id, created_at DESC);
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS min_threshold INTEGER DEFAULT 2;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS invoice_number TEXT;
@@ -1490,9 +1935,12 @@ STOCK_TEMPLATE = (
                                 <td class="p-2 border-r border-slate-200">
                                     {% if item.image_filename %}
                                     <img
-                                        src="{{ url_for('uploaded_file', filename=item.image_filename) }}"
+                                        src="{{ url_for('uploaded_file', filename=item.image_filename, variant='thumb') }}"
                                         alt="Photo de {{ item.name }}"
                                         loading="lazy"
+                                        decoding="async"
+                                        width="56"
+                                        height="56"
                                         class="w-14 h-14 rounded object-cover bg-slate-100 mx-auto"
                                     >
                                     {% else %}
@@ -1670,7 +2118,7 @@ PRINT_STOCK_TEMPLATE = (
                 {% for item in group['items'] %}
                 <article class="location-print-card bg-white shadow-sm">
                     {% if item.image_filename %}
-                    <img class="location-print-photo rounded border border-slate-200" src="{{ url_for('uploaded_file', filename=item.image_filename) }}" alt="Photo de {{ item.name }}">
+                    <img class="location-print-photo rounded border border-slate-200" src="{{ url_for('uploaded_file', filename=item.image_filename, variant='thumb') }}" alt="Photo de {{ item.name }}" decoding="async" width="360" height="360">
                     {% else %}
                     <div class="location-print-placeholder rounded">Photo non disponible</div>
                     {% endif %}
@@ -2256,6 +2704,18 @@ SETTINGS_TEMPLATE = (
         <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
         {% endfor %}
 
+        <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800">Mon mot de passe</h2>
+            <p class="mt-1 text-xs text-slate-500">Choisissez un nouveau mot de passe (12 caractères minimum).</p>
+            <form action="{{ url_for('change_own_password') }}" method="POST" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="password" name="current_password" required autocomplete="current-password" placeholder="Mot de passe actuel" class="text-xs p-2 border border-slate-300 rounded">
+                <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Nouveau mot de passe" class="text-xs p-2 border border-slate-300 rounded">
+                <input type="password" name="password_confirmation" required minlength="12" autocomplete="new-password" placeholder="Confirmer le nouveau mot de passe" class="text-xs p-2 border border-slate-300 rounded">
+                <button type="submit" class="bg-forest hover:bg-forest-light text-white rounded text-xs font-semibold">Modifier mon mot de passe</button>
+            </form>
+        </section>
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Emplacements -->
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
@@ -2349,24 +2809,26 @@ SETTINGS_TEMPLATE = (
         <section class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
             <div>
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Gestion des utilisateurs</h2>
-                <p class="text-xs text-slate-500 mt-1">Les nouveaux comptes n'ont pas accès à la gestion des utilisateurs.</p>
+                <p class="text-xs text-slate-500 mt-1">Les comptes sont activés par un lien personnel valable une heure. Aucun mot de passe n'est envoyé par e-mail.</p>
+                {% if not mail_sending_enabled %}<p role="alert" class="mt-2 text-xs text-rose-700">L'envoi d'e-mails n'est pas configuré. Ajoutez les paramètres SMTP au serveur avant d'inviter les utilisateurs.</p>{% endif %}
+                <p class="mt-2 text-[11px] text-slate-500">Configuration serveur : SMTP_HOST, SMTP_PORT, SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD et SMTP_USE_TLS (ou SMTP_USE_SSL). APP_BASE_URL doit pointer vers l'adresse HTTPS publique de l'application.</p>
             </div>
             <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input name="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="Identifiant ou e-mail" title="3 à 64 caractères ; lettres, chiffres, point, tiret, souligné, @ ou +" class="text-xs p-2 border border-slate-300 rounded">
-                <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Mot de passe (12 caractères min.)" class="text-xs p-2 border border-slate-300 rounded">
+                <input name="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="Identifiant" title="3 à 64 caractères ; lettres, chiffres, point, tiret, souligné, @ ou +" class="text-xs p-2 border border-slate-300 rounded">
+                <input type="email" name="email" required maxlength="254" autocomplete="email" placeholder="Adresse e-mail" class="text-xs p-2 border border-slate-300 rounded">
                 <select name="role" class="text-xs p-2 border border-slate-300 rounded bg-white">
                     <option value="user">Utilisateur</option>
                     <option value="admin">Administrateur</option>
                 </select>
-                <button type="submit" class="bg-forest hover:bg-forest-light text-white rounded text-xs font-semibold">Créer le compte</button>
+                <button type="submit" class="bg-forest hover:bg-forest-light text-white rounded text-xs font-semibold">Créer et inviter</button>
             </form>
             <div class="divide-y divide-slate-100">
                 {% for account in users %}
                 <div class="py-3 flex flex-col gap-3">
                     <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span class="font-semibold text-slate-800">{{ account.username }}</span>
-                        <span class="text-slate-500">{{ 'Administrateur' if account.role == 'admin' else 'Utilisateur' }} · {{ 'Actif' if account.active else 'Désactivé' }}</span>
+                        <span class="text-slate-500">{{ 'Administrateur' if account.role == 'admin' else 'Utilisateur' }} · {{ 'Désactivé' if not account.active else ('Mot de passe à définir' if not account.password_hash else 'Actif') }}</span>
                         {% if account.id != current_user.id %}
                         <form action="{{ url_for('toggle_user', user_id=account.id) }}" method="POST">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -2376,10 +2838,10 @@ SETTINGS_TEMPLATE = (
                         <span class="text-slate-400">Votre compte</span>
                         {% endif %}
                     </div>
-                    <form action="{{ url_for('reset_user_password', user_id=account.id) }}" method="POST" class="flex flex-wrap gap-2">
+                    <form action="{{ url_for('update_user_email', user_id=account.id) }}" method="POST" class="flex flex-wrap gap-2">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="password" name="password" required minlength="12" autocomplete="new-password" placeholder="Nouveau mot de passe (12 caractères min.)" class="flex-grow text-xs p-2 border border-slate-300 rounded">
-                        <button type="submit" class="text-xs px-3 py-2 rounded bg-slate-100 hover:bg-slate-200">Réinitialiser le mot de passe</button>
+                        <input type="email" name="email" value="{{ account.email or '' }}" required maxlength="254" autocomplete="email" placeholder="Adresse e-mail" class="min-w-0 flex-grow text-xs p-2 border border-slate-300 rounded">
+                        <button type="submit" class="text-xs px-3 py-2 rounded bg-slate-100 hover:bg-slate-200">Enregistrer l'e-mail et envoyer le lien</button>
                     </form>
                 </div>
                 {% else %}
@@ -3547,7 +4009,7 @@ def settings_view():
     """, (g.current_site["id"],))
   equipment = cur.fetchall()
   cur.execute(
-      "SELECT id, username, role, active FROM users ORDER BY username"
+      "SELECT id, username, email, password_hash, role, active FROM users ORDER BY username"
   )
   users = cur.fetchall() if g.current_user["role"] == "admin" else []
   cur.close()
@@ -3560,6 +4022,7 @@ def settings_view():
       users=users,
       current_user=g.current_user,
       total_stock_value=total_val,
+      mail_sending_enabled=mail_sending_enabled(),
   )
 
 
@@ -3567,7 +4030,7 @@ def settings_view():
 def add_user():
   require_admin()
   username = request.form.get("username", "").strip().lower()
-  password = request.form.get("password", "")
+  email = request.form.get("email", "").strip().lower()
   role = request.form.get("role", "user")
   if not re.fullmatch(r"[\w.@+-]{3,64}", username):
     abort(
@@ -3577,28 +4040,46 @@ def add_user():
             "(lettres, chiffres, point, tiret, souligné, @ ou +)."
         ),
     )
-  if len(password) < 12:
-    abort(400, description="Le mot de passe doit contenir au moins 12 caractères.")
+  if not is_valid_email_address(email):
+    abort(400, description="Adresse e-mail invalide.")
   if role not in {"user", "admin"}:
     abort(400, description="Rôle utilisateur invalide.")
 
-  cur = get_db().cursor()
+  db = get_db()
+  cur = db.cursor()
   cur.execute(
       """
-          INSERT INTO users (username, password_hash, role)
-          VALUES (%s, %s, %s)
-          ON CONFLICT (username) DO NOTHING
+          INSERT INTO users (username, email, password_hash, role)
+          VALUES (%s, %s, NULL, %s)
+          ON CONFLICT DO NOTHING
           RETURNING id
       """,
-      (username, hash_password(password), role),
+      (username, email, role),
   )
-  if cur.fetchone() is None:
+  account = cur.fetchone()
+  if account is None:
+    db.rollback()
     cur.close()
     flash("Cet identifiant existe déjà.", "error")
     return redirect(url_for("settings_view"))
-  get_db().commit()
+  db.commit()
   cur.close()
-  flash(f"Le compte « {username} » a été créé.", "success")
+  try:
+    issue_password_link(
+        account["id"], email, username, "Créer"
+    )
+  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+    app.logger.warning(
+        "Could not deliver a new-user password email (%s).",
+        type(error).__name__,
+    )
+    flash(
+        f"Le compte « {username} » a été créé, mais l'e-mail n'a pas pu être envoyé. "
+        "Vérifiez la configuration SMTP puis renvoyez le lien.",
+        "error",
+    )
+    return redirect(url_for("settings_view"))
+  flash(f"Le compte « {username} » a été créé et le lien envoyé à {email}.", "success")
   return redirect(url_for("settings_view"))
 
 
@@ -3626,6 +4107,10 @@ def toggle_user(user_id):
       cur.close()
       abort(400, description="Impossible de désactiver le dernier administrateur actif.")
   cur.execute("UPDATE users SET active = NOT active WHERE id = %s", (user_id,))
+  cur.execute(
+      "DELETE FROM password_reset_tokens WHERE user_id = %s",
+      (user_id,),
+  )
   db.commit()
   cur.close()
   flash("Le statut du compte a été modifié.", "success")
@@ -3635,21 +4120,126 @@ def toggle_user(user_id):
 @app.route("/users/<int:user_id>/password", methods=["POST"])
 def reset_user_password(user_id):
   require_admin()
-  password = request.form.get("password", "")
-  if len(password) < 12:
-    abort(400, description="Le mot de passe doit contenir au moins 12 caractères.")
   cur = get_db().cursor()
   cur.execute(
-      "UPDATE users SET password_hash = %s WHERE id = %s RETURNING username",
-      (hash_password(password), user_id),
+      "SELECT username, email FROM users WHERE id = %s",
+      (user_id,),
   )
+  account = cur.fetchone()
+  cur.close()
+  if account is None:
+    abort(404)
+  if not account["email"]:
+    flash("Ajoutez d'abord une adresse e-mail à ce compte.", "error")
+    return redirect(url_for("settings_view"))
+  try:
+    sent = issue_password_link(
+        user_id, account["email"], account["username"], "Réinitialiser"
+    )
+  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+    app.logger.warning(
+        "Could not deliver an administrator-requested password email (%s).",
+        type(error).__name__,
+    )
+    flash("L'e-mail n'a pas pu être envoyé. Vérifiez la configuration SMTP.", "error")
+    return redirect(url_for("settings_view"))
+  if sent:
+    flash(f"Un lien de réinitialisation a été envoyé à {account['email']}.", "success")
+  else:
+    flash("Un lien a déjà été envoyé récemment. Veuillez patienter une minute.", "error")
+  return redirect(url_for("settings_view"))
+
+
+@app.route("/users/<int:user_id>/email", methods=["POST"])
+def update_user_email(user_id):
+  require_admin()
+  email = request.form.get("email", "").strip().lower()
+  if not is_valid_email_address(email):
+    abort(400, description="Adresse e-mail invalide.")
+  db = get_db()
+  cur = db.cursor()
+  try:
+    cur.execute(
+        """
+            UPDATE users SET email = %s
+            WHERE id = %s
+            RETURNING username
+        """,
+        (email, user_id),
+    )
+  except psycopg.errors.UniqueViolation:
+    db.rollback()
+    cur.close()
+    flash("Cette adresse e-mail est déjà associée à un autre compte.", "error")
+    return redirect(url_for("settings_view"))
   account = cur.fetchone()
   if account is None:
     cur.close()
     abort(404)
-  get_db().commit()
+  cur.execute(
+      "DELETE FROM password_reset_tokens WHERE user_id = %s",
+      (user_id,),
+  )
+  db.commit()
   cur.close()
-  flash(f"Le mot de passe du compte « {account['username']} » a été réinitialisé.", "success")
+  try:
+    sent = issue_password_link(
+        user_id, email, account["username"], "Créer ou réinitialiser"
+    )
+  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+    app.logger.warning(
+        "Could not deliver an updated-user password email (%s).",
+        type(error).__name__,
+    )
+    flash(
+        "L'adresse a été enregistrée, mais l'e-mail n'a pas pu être envoyé. "
+        "Vérifiez la configuration SMTP puis réessayez.",
+        "error",
+    )
+    return redirect(url_for("settings_view"))
+  if sent:
+    flash(f"L'adresse a été enregistrée et le lien envoyé à {email}.", "success")
+  else:
+    flash("L'adresse a été enregistrée. Un lien a déjà été envoyé récemment.", "error")
+  return redirect(url_for("settings_view"))
+
+
+@app.route("/account/password", methods=["POST"])
+def change_own_password():
+  current_password = request.form.get("current_password", "")
+  password = request.form.get("password", "")
+  confirmation = request.form.get("password_confirmation", "")
+  cur = get_db().cursor()
+  cur.execute(
+      "SELECT password_hash FROM users WHERE id = %s AND active = TRUE",
+      (g.current_user["id"],),
+  )
+  account = cur.fetchone()
+  cur.close()
+  if (
+      account is None
+      or not account["password_hash"]
+      or not verify_password(account["password_hash"], current_password)
+  ):
+    flash("Le mot de passe actuel est incorrect.", "error")
+  elif len(password) < 12:
+    flash("Le nouveau mot de passe doit contenir au moins 12 caractères.", "error")
+  elif password != confirmation:
+    flash("Les deux nouveaux mots de passe ne correspondent pas.", "error")
+  else:
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE users SET password_hash = %s WHERE id = %s",
+        (hash_password(password), g.current_user["id"]),
+    )
+    cur.execute(
+        "DELETE FROM password_reset_tokens WHERE user_id = %s",
+        (g.current_user["id"],),
+    )
+    db.commit()
+    cur.close()
+    flash("Votre mot de passe a été modifié.", "success")
   return redirect(url_for("settings_view"))
 
 
