@@ -3,16 +3,16 @@ import datetime
 import hashlib
 import hmac
 import io
+import json
 import math
 import mimetypes
 import os
 import re
 import secrets
-import smtplib
-import ssl
+import urllib.error
+import urllib.request
 import warnings
 from decimal import Decimal, InvalidOperation
-from email.message import EmailMessage
 from urllib.parse import urlparse
 
 import psycopg
@@ -549,90 +549,81 @@ def hash_password(password):
   return generate_password_hash(password, method=PASSWORD_HASH_METHOD)
 
 
-def smtp_configuration():
-  host = os.environ.get("SMTP_HOST", "").strip()
-  sender = os.environ.get("SMTP_FROM", "").strip()
-  if not host or not sender:
-    raise RuntimeError("Configurez SMTP_HOST et SMTP_FROM pour activer l'envoi d'e-mails.")
-  if not is_valid_email_address(sender):
-    raise RuntimeError("SMTP_FROM doit être une adresse e-mail valide.")
-  try:
-    port = int(os.environ.get("SMTP_PORT", "587"))
-  except ValueError as error:
-    raise RuntimeError("SMTP_PORT doit être un nombre.") from error
-  if not 1 <= port <= 65535:
-    raise RuntimeError("SMTP_PORT doit être compris entre 1 et 65535.")
-
-  username = os.environ.get("SMTP_USERNAME", "")
-  password = os.environ.get("SMTP_PASSWORD", "")
-  if bool(username) != bool(password):
-    raise RuntimeError("SMTP_USERNAME et SMTP_PASSWORD doivent être définis ensemble.")
-  ssl_value = os.environ.get("SMTP_USE_SSL", "false").strip().lower()
-  tls_value = os.environ.get(
-      "SMTP_USE_TLS", "false" if ssl_value == "true" else "true"
-  ).strip().lower()
-  if ssl_value not in {"true", "false"} or tls_value not in {"true", "false"}:
-    raise RuntimeError("SMTP_USE_SSL et SMTP_USE_TLS doivent valoir true ou false.")
-  use_ssl = ssl_value == "true"
-  use_tls = tls_value == "true"
-  if use_ssl and use_tls:
-    raise RuntimeError("Activez SMTP_USE_SSL ou SMTP_USE_TLS, mais pas les deux.")
-  if not use_ssl and not use_tls:
-    raise RuntimeError("L'envoi SMTP doit être protégé par TLS ou SSL.")
+def brevo_configuration():
+  api_key = os.environ.get("BREVO_API_KEY", "").strip()
+  sender_email = os.environ.get("BREVO_SENDER_EMAIL", "").strip()
+  sender_name = os.environ.get("BREVO_SENDER_NAME", "Suivi de stock").strip()
+  if not api_key or not sender_email:
+    raise RuntimeError(
+        "Configurez BREVO_API_KEY et BREVO_SENDER_EMAIL pour activer l'envoi d'e-mails."
+    )
+  if not is_valid_email_address(sender_email):
+    raise RuntimeError("BREVO_SENDER_EMAIL doit être une adresse e-mail valide.")
+  if not sender_name:
+    raise RuntimeError("BREVO_SENDER_NAME ne peut pas être vide.")
   return {
-      "host": host,
-      "port": port,
-      "sender": sender,
-      "username": username,
-      "password": password,
-      "use_ssl": use_ssl,
-      "use_tls": use_tls,
+      "api_key": api_key,
+      "sender_email": sender_email,
+      "sender_name": sender_name,
   }
 
 
 def mail_sending_enabled():
   try:
-    smtp_configuration()
+    brevo_configuration()
   except RuntimeError:
     return False
   return True
 
 
 def send_password_email(recipient, username, reset_url, action):
-  config = smtp_configuration()
-  message = EmailMessage()
-  message["Subject"] = "Suivi de stock - " + action
-  message["From"] = config["sender"]
-  message["To"] = recipient
-  message.set_content(
-      f"""Bonjour {username},
-
-Utilisez le lien ci-dessous pour {action.lower()} votre mot de passe :
-{reset_url}
-
-Ce lien est valable une heure et ne peut être utilisé qu'une seule fois.
-Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.
-
-L'équipe Suivi de stock
-"""
+  config = brevo_configuration()
+  payload = {
+      "sender": {
+          "name": config["sender_name"],
+          "email": config["sender_email"],
+      },
+      "to": [{"email": recipient, "name": username}],
+      "subject": "Suivi de stock - " + action,
+      "textContent": (
+          f"Bonjour {username},\n\n"
+          f"Utilisez le lien ci-dessous pour {action.lower()} votre mot de passe :\n"
+          f"{reset_url}\n\n"
+          "Ce lien est valable une heure et ne peut être utilisé qu'une seule fois.\n"
+          "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\n"
+          "L'équipe Suivi de stock"
+      ),
+  }
+  api_request = urllib.request.Request(
+      "https://api.brevo.com/v3/smtp/email",
+      data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+      headers={
+          "accept": "application/json",
+          "api-key": config["api_key"],
+          "content-type": "application/json",
+      },
+      method="POST",
   )
-
-  smtp_class = smtplib.SMTP_SSL if config["use_ssl"] else smtplib.SMTP
-  with smtp_class(
-      config["host"],
-      config["port"],
-      timeout=15,
-      **({"context": ssl.create_default_context()} if config["use_ssl"] else {}),
-  ) as server:
-    if config["use_tls"]:
-      server.starttls(context=ssl.create_default_context())
-    if config["username"]:
-      server.login(config["username"], config["password"])
-    server.send_message(message)
+  try:
+    with urllib.request.urlopen(api_request, timeout=15) as response:
+      if response.status not in {200, 201, 202}:
+        raise RuntimeError(
+            f"Brevo API returned unexpected HTTP status {response.status}."
+        )
+  except urllib.error.HTTPError as error:
+    try:
+      response_body = json.loads(error.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+      response_body = {}
+    error_code = response_body.get("code") if isinstance(response_body, dict) else None
+    details = f", code {error_code}" if error_code else ""
+    raise RuntimeError(
+        f"Brevo API rejected the email (HTTP {error.code}{details})."
+    ) from error
 
 
 def issue_password_link(user_id, recipient, username, action):
-  smtp_configuration()
+  brevo_configuration()
   base_url = urlparse(APP_BASE_URL)
   if (
       base_url.scheme != "https"
@@ -676,7 +667,17 @@ def issue_password_link(user_id, recipient, username, action):
   cur.close()
 
   reset_url = APP_BASE_URL + url_for("reset_password", token=token)
-  send_password_email(recipient, username, reset_url, action)
+  try:
+    send_password_email(recipient, username, reset_url, action)
+  except (RuntimeError, OSError):
+    cur = db.cursor()
+    cur.execute(
+        "DELETE FROM password_reset_tokens WHERE token_hash = %s",
+        (token_hash,),
+    )
+    db.commit()
+    cur.close()
+    raise
   return True
 
 
@@ -804,7 +805,7 @@ def forgot_password():
               user["username"],
               "Réinitialiser",
           )
-        except (RuntimeError, OSError, smtplib.SMTPException) as error:
+        except (RuntimeError, OSError) as error:
           app.logger.warning(
               "Could not deliver a password reset email (%s): %s",
               type(error).__name__,
@@ -2811,8 +2812,8 @@ SETTINGS_TEMPLATE = (
             <div>
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Gestion des utilisateurs</h2>
                 <p class="text-xs text-slate-500 mt-1">Les comptes sont activés par un lien personnel valable une heure. Aucun mot de passe n'est envoyé par e-mail.</p>
-                {% if not mail_sending_enabled %}<p role="alert" class="mt-2 text-xs text-rose-700">L'envoi d'e-mails n'est pas configuré. Ajoutez les paramètres SMTP au serveur avant d'inviter les utilisateurs.</p>{% endif %}
-                <p class="mt-2 text-[11px] text-slate-500">Configuration serveur : SMTP_HOST, SMTP_PORT, SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD et SMTP_USE_TLS (ou SMTP_USE_SSL). APP_BASE_URL doit pointer vers l'adresse HTTPS publique de l'application.</p>
+                {% if not mail_sending_enabled %}<p role="alert" class="mt-2 text-xs text-rose-700">L'envoi d'e-mails n'est pas configuré. Ajoutez la clé API Brevo et l'adresse d'expéditeur vérifiée dans l'environnement du serveur.</p>{% endif %}
+                <p class="mt-2 text-[11px] text-slate-500">Configuration serveur : BREVO_API_KEY, BREVO_SENDER_EMAIL, BREVO_SENDER_NAME (facultatif) et APP_BASE_URL, qui doit pointer vers l'adresse HTTPS publique de l'application.</p>
             </div>
             <form action="{{ url_for('add_user') }}" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -4069,7 +4070,7 @@ def add_user():
     issue_password_link(
         account["id"], email, username, "Créer"
     )
-  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+  except (RuntimeError, OSError) as error:
     app.logger.warning(
         "Could not deliver a new-user password email (%s): %s",
         type(error).__name__,
@@ -4138,7 +4139,7 @@ def reset_user_password(user_id):
     sent = issue_password_link(
         user_id, account["email"], account["username"], "Réinitialiser"
     )
-  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+  except (RuntimeError, OSError) as error:
     app.logger.warning(
         "Could not deliver an administrator-requested password email (%s): %s",
         type(error).__name__,
@@ -4189,7 +4190,7 @@ def update_user_email(user_id):
     sent = issue_password_link(
         user_id, email, account["username"], "Créer ou réinitialiser"
     )
-  except (RuntimeError, OSError, smtplib.SMTPException) as error:
+  except (RuntimeError, OSError) as error:
     app.logger.warning(
         "Could not deliver an updated-user password email (%s): %s",
         type(error).__name__,
