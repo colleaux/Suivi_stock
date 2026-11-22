@@ -700,6 +700,72 @@ def csrf_token():
 app.jinja_env.globals["csrf_token"] = csrf_token
 
 
+def login_session_token_hash():
+  token = session.get("_login_session_id")
+  if not token:
+    return None
+  return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def register_login_session(user_id, username):
+  token = secrets.token_urlsafe(32)
+  session["_login_session_id"] = token
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          INSERT INTO user_login_sessions
+              (user_id, username, session_token_hash)
+          VALUES (%s, %s, %s)
+      """,
+      (user_id, username, hashlib.sha256(token.encode("utf-8")).hexdigest()),
+  )
+  get_db().commit()
+  cur.close()
+
+
+def update_login_session_activity(user_id, username):
+  token_hash = login_session_token_hash()
+  if token_hash is None:
+    register_login_session(user_id, username)
+    return True
+
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          UPDATE user_login_sessions
+          SET last_activity_at = CURRENT_TIMESTAMP
+          WHERE session_token_hash = %s
+            AND user_id = %s
+            AND logged_out_at IS NULL
+          RETURNING id
+      """,
+      (token_hash, user_id),
+  )
+  updated = cur.fetchone() is not None
+  get_db().commit()
+  cur.close()
+  return updated
+
+
+def close_login_session():
+  token_hash = login_session_token_hash()
+  if token_hash is None:
+    return
+  cur = get_db().cursor()
+  cur.execute(
+      """
+          UPDATE user_login_sessions
+          SET logged_out_at = CURRENT_TIMESTAMP,
+              last_activity_at = CURRENT_TIMESTAMP
+          WHERE session_token_hash = %s
+            AND logged_out_at IS NULL
+      """,
+      (token_hash,),
+  )
+  get_db().commit()
+  cur.close()
+
+
 @app.before_request
 def protect_requests():
   public_endpoints = {"login", "forgot_password", "reset_password"}
@@ -715,6 +781,12 @@ def protect_requests():
     g.current_user = cur.fetchone()
     cur.close()
     if g.current_user is None:
+      close_login_session()
+      session.clear()
+      return redirect(url_for("login"))
+    if not update_login_session_activity(
+        g.current_user["id"], g.current_user["username"]
+    ):
       session.clear()
       return redirect(url_for("login"))
     if request.endpoint == "entry_form" and request.args.get("site_id"):
@@ -775,9 +847,12 @@ def login():
         )
         get_db().commit()
         cur.close()
+      if session.get("authenticated"):
+        close_login_session()
       session.clear()
       session["authenticated"] = True
       session["user_id"] = user["id"]
+      register_login_session(user["id"], user["username"])
       csrf_token()
       return redirect(url_for("choose_site"))
     error = "Identifiant ou mot de passe incorrect."
@@ -891,6 +966,7 @@ def reset_password(token):
           )
           db.commit()
           cur.close()
+          close_login_session()
           session.clear()
           flash("Votre mot de passe a été enregistré. Vous pouvez vous connecter.", "success")
           response = redirect(url_for("login"))
@@ -913,6 +989,7 @@ def reset_password(token):
 
 @app.route("/logout", methods=["POST"])
 def logout():
+  close_login_session()
   session.clear()
   return redirect(url_for("login"))
 
@@ -1167,6 +1244,17 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_created
             ON password_reset_tokens (user_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS user_login_sessions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            username TEXT NOT NULL,
+            session_token_hash TEXT NOT NULL UNIQUE,
+            login_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_activity_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            logged_out_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_login_sessions_activity
+            ON user_login_sessions (last_activity_at DESC);
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS min_threshold INTEGER DEFAULT 2;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS supplier TEXT;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS invoice_number TEXT;
@@ -2304,8 +2392,9 @@ MONTHLY_CLOSE_TEMPLATE = (
             </div>
             <p class="mt-4 rounded-lg border border-emerald-700 bg-emerald-950/40 p-3 text-xs leading-relaxed text-emerald-100">
                 Méthode : CUMP mobile reconstitué par ordre chronologique. Le stock antérieur à l’historique est estimé
-                pour rapprocher les mouvements du stock actuel. En l’absence de coût documenté, le dernier prix d’achat
-                antérieur à la période est utilisé, sinon le prix actuel ; ces montants sont signalés « Estimé ».
+                pour rapprocher les mouvements du stock actuel. En l’absence de coût positif documenté, notamment pour
+                une entrée à 0 €, le dernier prix d’achat positif antérieur à la période est utilisé, sinon le prix actuel ;
+                ces montants sont signalés « Estimé ».
                 Cette reconstitution indicative ne remplace pas un inventaire d’ouverture validé.
             </p>
             <p class="mt-2 text-right text-[11px] text-emerald-200">Édité le {{ generated_at }}</p>
@@ -2699,8 +2788,8 @@ SETTINGS_TEMPLATE = (
     + """
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
-            <h1 class="text-base font-bold text-slate-900">{{ 'Réglages & Configuration' if section == 'home' else {'locations': 'Emplacements de stockage', 'equipment': 'Équipements & machines', 'users': 'Gestion des utilisateurs'}[section] }}</h1>
-            <p class="text-xs text-slate-500">{% if section == 'home' %}Choisissez une rubrique à configurer.{% elif section == 'locations' %}Gérez les lieux de stockage du site {{ g.current_site.name }}.{% elif section == 'equipment' %}Gérez les équipements et leurs emplacements pour le site {{ g.current_site.name }}.{% else %}Gérez les comptes et leurs accès à l’application.{% endif %}</p>
+            <h1 class="text-base font-bold text-slate-900">{{ 'Réglages & Configuration' if section == 'home' else {'locations': 'Emplacements de stockage', 'equipment': 'Équipements & machines', 'users': 'Gestion des utilisateurs', 'connections': 'Connexions & historique'}[section] }}</h1>
+            <p class="text-xs text-slate-500">{% if section == 'home' %}Choisissez une rubrique à configurer.{% elif section == 'locations' %}Gérez les lieux de stockage du site {{ g.current_site.name }}.{% elif section == 'equipment' %}Gérez les équipements et leurs emplacements pour le site {{ g.current_site.name }}.{% elif section == 'connections' %}Consultez les sessions actives et les dernières connexions réussies.{% else %}Gérez les comptes et leurs accès à l’application.{% endif %}</p>
         </div>
         {% for category, message in get_flashed_messages(with_categories=true) %}
         <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
@@ -2717,6 +2806,9 @@ SETTINGS_TEMPLATE = (
             {% if current_user.role == 'admin' %}
             <a href="{{ url_for('settings_view', section='users') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
                 <span class="text-3xl" aria-hidden="true">👥</span><span><strong class="block text-base text-slate-900">Gestion des utilisateurs</strong><span class="mt-1 block text-sm text-slate-500">Inviter, modifier ou supprimer des comptes.</span></span>
+            </a>
+            <a href="{{ url_for('settings_view', section='connections') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                <span class="text-3xl" aria-hidden="true">🔐</span><span><strong class="block text-base text-slate-900">Connexions & historique</strong><span class="mt-1 block text-sm text-slate-500">Voir qui est connecté et les connexions récentes.</span></span>
             </a>
             {% endif %}
         </nav>
@@ -2817,6 +2909,52 @@ SETTINGS_TEMPLATE = (
                 </div>
                 <p id="equipment-search-empty" class="hidden text-sm italic text-slate-400" role="status">Aucun équipement ne correspond à cette recherche.</p>
             </div>
+        {% endif %}
+        {% if section == 'connections' and current_user.role == 'admin' %}
+        <div class="space-y-6">
+            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-200 px-5 py-4">
+                    <h2 class="text-sm font-bold text-slate-900">Connectés actuellement</h2>
+                    <p class="mt-1 text-xs text-slate-500">Une session est considérée active si elle a eu une activité au cours des 30 dernières minutes.</p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[600px] text-left text-sm">
+                        <thead class="bg-slate-50 text-xs uppercase text-slate-600"><tr><th scope="col" class="px-4 py-3">Utilisateur</th><th scope="col" class="px-4 py-3">Connecté depuis</th><th scope="col" class="px-4 py-3">Dernière activité</th></tr></thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for connection in active_sessions %}
+                            <tr><td class="px-4 py-3 font-semibold text-slate-800">{{ connection.username }}</td><td class="px-4 py-3 text-slate-600">{{ connection.login_at.strftime('%d/%m/%Y %H:%M') }}</td><td class="px-4 py-3 text-slate-600">{{ connection.last_activity_at.strftime('%d/%m/%Y %H:%M') }}</td></tr>
+                            {% else %}
+                            <tr><td colspan="3" class="px-4 py-6 text-center text-sm italic text-slate-400">Aucune session active récemment.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-200 px-5 py-4">
+                    <h2 class="text-sm font-bold text-slate-900">Historique des connexions</h2>
+                    <p class="mt-1 text-xs text-slate-500">Les 100 dernières connexions réussies. Les tentatives échouées ne sont pas enregistrées.</p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[760px] text-left text-sm">
+                        <thead class="bg-slate-50 text-xs uppercase text-slate-600"><tr><th scope="col" class="px-4 py-3">Utilisateur</th><th scope="col" class="px-4 py-3">Connexion</th><th scope="col" class="px-4 py-3">Dernière activité</th><th scope="col" class="px-4 py-3">Déconnexion</th><th scope="col" class="px-4 py-3">État</th></tr></thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for connection in login_history %}
+                            <tr>
+                                <td class="px-4 py-3 font-semibold text-slate-800">{{ connection.username }}</td>
+                                <td class="px-4 py-3 text-slate-600">{{ connection.login_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td class="px-4 py-3 text-slate-600">{{ connection.last_activity_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td class="px-4 py-3 text-slate-600">{{ connection.logged_out_at.strftime('%d/%m/%Y %H:%M') if connection.logged_out_at else '—' }}</td>
+                                <td class="px-4 py-3"><span class="rounded-full px-2 py-1 text-xs font-semibold {% if connection.logged_out_at %}bg-slate-100 text-slate-600{% elif connection.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-amber-100 text-amber-800{% endif %}">{{ 'Déconnecté' if connection.logged_out_at else ('Actif' if connection.is_active else 'Expiré / inactif') }}</span></td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="px-4 py-6 text-center text-sm italic text-slate-400">Aucune connexion enregistrée pour le moment.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
         {% endif %}
         {% if section == 'users' and current_user.role == 'admin' %}
         <section class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
@@ -3073,7 +3211,7 @@ def build_monthly_close_rows(
         pass
       if price is not None and (not price.is_finite() or price < 0):
         price = None
-      used_fallback_price = price is None
+      used_fallback_price = price is None or price == 0
       if used_fallback_price:
         try:
           price = state["last_known_price"]
@@ -4012,9 +4150,9 @@ def edit_article(id):
 @app.route("/settings")
 def settings_view():
   section = request.args.get("section", "home")
-  if section not in {"home", "locations", "equipment", "users"}:
+  if section not in {"home", "locations", "equipment", "users", "connections"}:
     abort(404)
-  if section == "users":
+  if section in {"users", "connections"}:
     require_admin()
 
   db = get_db()
@@ -4022,6 +4160,8 @@ def settings_view():
   locations = []
   equipment = []
   users = []
+  active_sessions = []
+  login_history = []
   if section in {"locations", "equipment"}:
     cur.execute(
         "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
@@ -4042,6 +4182,26 @@ def settings_view():
         "SELECT id, username, email, password_hash, role, active FROM users ORDER BY username"
     )
     users = cur.fetchall()
+  if section == "connections":
+    cur.execute("""
+          SELECT username, login_at, last_activity_at
+          FROM user_login_sessions
+          WHERE logged_out_at IS NULL
+            AND last_activity_at >= CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+          ORDER BY last_activity_at DESC
+      """)
+    active_sessions = cur.fetchall()
+    cur.execute("""
+          SELECT username, login_at, last_activity_at, logged_out_at,
+                 (
+                     logged_out_at IS NULL
+                     AND last_activity_at >= CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+                 ) AS is_active
+          FROM user_login_sessions
+          ORDER BY login_at DESC, id DESC
+          LIMIT 100
+      """)
+    login_history = cur.fetchall()
   cur.close()
   total_val = calculate_total_stock_value()
   return render_template_string(
@@ -4051,6 +4211,8 @@ def settings_view():
       locations=locations,
       equipment=equipment,
       users=users,
+      active_sessions=active_sessions,
+      login_history=login_history,
       current_user=g.current_user,
       total_stock_value=total_val,
       mail_sending_enabled=mail_sending_enabled(),
@@ -4173,6 +4335,15 @@ def delete_user(user_id):
       cur.close()
       abort(400, description="Impossible de supprimer le dernier administrateur actif.")
 
+  cur.execute(
+      """
+          UPDATE user_login_sessions
+          SET user_id = NULL,
+              logged_out_at = COALESCE(logged_out_at, CURRENT_TIMESTAMP)
+          WHERE user_id = %s
+      """,
+      (user_id,),
+  )
   cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
   db.commit()
   cur.close()
