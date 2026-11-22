@@ -2697,14 +2697,29 @@ EDIT_ARTICLE_TEMPLATE = (
 SETTINGS_TEMPLATE = (
     LAYOUT_HEADER
     + """
-    <div class="max-w-4xl mx-auto space-y-6">
+    <div class="max-w-6xl mx-auto space-y-6">
         <div class="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
-            <h1 class="text-base font-bold text-slate-900">Réglages & Configuration</h1>
-            <p class="text-xs text-slate-500">Gérez et modifiez les emplacements physiques et les équipements associés</p>
+            <h1 class="text-base font-bold text-slate-900">{{ 'Réglages & Configuration' if section == 'home' else {'locations': 'Emplacements de stockage', 'equipment': 'Équipements & machines', 'users': 'Gestion des utilisateurs'}[section] }}</h1>
+            <p class="text-xs text-slate-500">{% if section == 'home' %}Choisissez une rubrique à configurer.{% elif section == 'locations' %}Gérez les lieux de stockage du site {{ g.current_site.name }}.{% elif section == 'equipment' %}Gérez les équipements et leurs emplacements pour le site {{ g.current_site.name }}.{% else %}Gérez les comptes et leurs accès à l’application.{% endif %}</p>
         </div>
         {% for category, message in get_flashed_messages(with_categories=true) %}
         <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
         {% endfor %}
+
+        {% if section == 'home' %}
+        <nav class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Rubriques des réglages">
+            <a href="{{ url_for('settings_view', section='locations') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                <span class="text-3xl" aria-hidden="true">📍</span><span><strong class="block text-base text-slate-900">Emplacements de stockage</strong><span class="mt-1 block text-sm text-slate-500">Créer, renommer ou supprimer les lieux.</span></span>
+            </a>
+            <a href="{{ url_for('settings_view', section='equipment') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                <span class="text-3xl" aria-hidden="true">⚙️</span><span><strong class="block text-base text-slate-900">Équipements & machines</strong><span class="mt-1 block text-sm text-slate-500">Consulter et modifier les équipements du site.</span></span>
+            </a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('settings_view', section='users') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                <span class="text-3xl" aria-hidden="true">👥</span><span><strong class="block text-base text-slate-900">Gestion des utilisateurs</strong><span class="mt-1 block text-sm text-slate-500">Inviter, modifier ou supprimer des comptes.</span></span>
+            </a>
+            {% endif %}
+        </nav>
 
         <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800">Mon mot de passe</h2>
@@ -2717,9 +2732,11 @@ SETTINGS_TEMPLATE = (
                 <button type="submit" class="bg-forest hover:bg-forest-light text-white rounded text-xs font-semibold">Modifier mon mot de passe</button>
             </form>
         </section>
+        {% else %}
+        <a href="{{ url_for('settings_view') }}" class="inline-flex min-h-10 items-center text-sm font-semibold text-emerald-900 hover:underline">← Retour aux réglages</a>
+        {% endif %}
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Emplacements -->
+        {% if section == 'locations' %}
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
                     📍 Emplacements de Stockage
@@ -2748,25 +2765,26 @@ SETTINGS_TEMPLATE = (
                     {% endfor %}
                 </div>
             </div>
+        {% endif %}
 
-            <!-- Équipements -->
+        {% if section == 'equipment' %}
             <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-200 flex items-center gap-2">
                     ⚙️ Équipements & Machines
                 </h2>
-                <form action="/add_equipment" method="POST" class="space-y-2">
+                <form action="/add_equipment" method="POST" class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_auto]">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
-                    <select name="location_id" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                    <input type="text" name="name" required placeholder="Nom de l'équipement..." class="w-full text-sm p-2 border border-slate-300 rounded outline-none focus:border-emerald-700">
+                    <select name="location_id" class="w-full text-sm p-2 border border-slate-300 rounded bg-white">
                         <option value="">-- Rattacher à un emplacement --</option>
                         {% for loc in locations %}
                         <option value="{{ loc.id }}">{{ loc.name }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="w-full bg-forest hover:bg-forest-light text-white py-2 rounded text-xs font-semibold transition">Ajouter l'Équipement</button>
+                    <button type="submit" class="min-h-10 rounded bg-forest px-4 py-2 text-sm font-semibold text-white transition hover:bg-forest-light">Ajouter un équipement</button>
                 </form>
 
-                <div class="space-y-1">
+                <div class="max-w-md space-y-1">
                     <label for="equipment-search" class="block text-xs font-semibold text-slate-700">Rechercher un équipement</label>
                     <input
                         id="equipment-search"
@@ -2774,44 +2792,38 @@ SETTINGS_TEMPLATE = (
                         placeholder="Nom de machine ou emplacement…"
                         aria-label="Rechercher un équipement ou une machine"
                         aria-controls="equipment-list"
-                        class="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-emerald-700"
+                        class="w-full rounded border border-slate-300 p-2 text-sm outline-none focus:border-emerald-700"
                     >
-                    <p id="equipment-search-count" class="text-[11px] text-slate-500" aria-live="polite">{{ equipment|length }} équipement(s)</p>
+                    <p id="equipment-search-count" class="text-xs text-slate-500" aria-live="polite">{{ equipment|length }} équipement(s)</p>
                 </div>
 
-                <div id="equipment-list" class="divide-y divide-slate-100 text-xs pt-2">
+                <div class="overflow-x-auto rounded-lg border border-slate-200">
+                <table id="equipment-list" class="w-full min-w-[700px] border-collapse text-left text-sm">
+                    <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                        <tr><th scope="col" class="px-3 py-3">Équipement / machine</th><th scope="col" class="px-3 py-3">Emplacement</th><th scope="col" class="px-3 py-3 text-right">Actions</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
                     {% for eq in equipment %}
-                    <div class="equipment-search-item py-3 space-y-1" data-search="{{ eq.name }} {{ eq.loc_name or '' }}">
-                        <form action="/edit_equipment/{{ eq.id }}" method="POST" class="space-y-1.5">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <div class="flex gap-2">
-                                <input type="text" name="name" value="{{ eq.name }}" required class="text-xs p-1 border border-slate-200 rounded flex-grow font-semibold text-slate-800 focus:border-emerald-700">
-                                <button type="submit" class="text-emerald-800 hover:underline text-[11px] font-medium">Sauvegarder</button>
-                            </div>
-                            <div class="flex justify-between items-center">
-                                <select name="location_id" class="text-[11px] p-1 border border-slate-200 rounded bg-white text-slate-600">
-                                    <option value="">-- Aucun lieu --</option>
-                                    {% for loc in locations %}
-                                    <option value="{{ loc.id }}" {% if eq.location_id == loc.id %}selected{% endif %}>📍 {{ loc.name }}</option>
-                                    {% endfor %}
-                                </select>
-                                <button type="submit" form="del_eq_{{ eq.id }}" class="text-rose-600 hover:underline text-[11px]">Supprimer</button>
-                            </div>
-                        </form>
-                        <form id="del_eq_{{ eq.id }}" action="/delete_equipment/{{ eq.id }}" method="POST" onsubmit="return confirm('Supprimer cet équipement ?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
-                    </div>
+                    <tr class="equipment-search-item" data-search="{{ eq.name }} {{ eq.loc_name or '' }}">
+                        <td class="px-3 py-2.5"><form id="edit_eq_{{ eq.id }}" action="/edit_equipment/{{ eq.id }}" method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form><input form="edit_eq_{{ eq.id }}" type="text" name="name" value="{{ eq.name }}" required aria-label="Nom de l'équipement {{ eq.name }}" class="w-full rounded border border-slate-200 px-2 py-1.5 font-semibold text-slate-800 focus:border-emerald-700"></td>
+                        <td class="px-3 py-2.5"><select form="edit_eq_{{ eq.id }}" name="location_id" aria-label="Emplacement de {{ eq.name }}" class="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-slate-700"><option value="">-- Aucun lieu --</option>{% for loc in locations %}<option value="{{ loc.id }}" {% if eq.location_id == loc.id %}selected{% endif %}>{{ loc.name }}</option>{% endfor %}</select></td>
+                        <td class="whitespace-nowrap px-3 py-2.5 text-right"><button type="submit" form="edit_eq_{{ eq.id }}" class="rounded px-2 py-1.5 font-semibold text-emerald-800 hover:bg-emerald-50">Enregistrer</button><form id="del_eq_{{ eq.id }}" action="/delete_equipment/{{ eq.id }}" method="POST" class="inline" onsubmit="return confirm('Supprimer cet équipement ?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="rounded px-2 py-1.5 font-semibold text-rose-700 hover:bg-rose-50">Supprimer</button></form></td>
+                    </tr>
                     {% else %}
-                    <p class="text-slate-400 text-xs italic">Aucun équipement configuré.</p>
+                    <tr id="equipment-empty"><td colspan="3" class="px-3 py-6 text-center text-sm italic text-slate-400">Aucun équipement configuré.</td></tr>
                     {% endfor %}
+                    </tbody>
+                </table>
                 </div>
-                <p id="equipment-search-empty" class="hidden text-slate-400 text-xs italic" role="status">Aucun équipement ne correspond à cette recherche.</p>
+                <p id="equipment-search-empty" class="hidden text-sm italic text-slate-400" role="status">Aucun équipement ne correspond à cette recherche.</p>
             </div>
-        </div>
-        {% if current_user.role == 'admin' %}
+        {% endif %}
+        {% if section == 'users' and current_user.role == 'admin' %}
         <section class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 space-y-4">
             <div>
                 <h2 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Gestion des utilisateurs</h2>
                 <p class="text-xs text-slate-500 mt-1">Les comptes sont activés par un lien personnel valable une heure. Aucun mot de passe n'est envoyé par e-mail.</p>
+                <p class="mt-1 text-xs text-amber-800">La suppression d'un compte est définitive. Les mouvements de stock sont conservés, mais son nom ne sera plus associé à l'historique.</p>
                 {% if not mail_sending_enabled %}<p role="alert" class="mt-2 text-xs text-rose-700">L'envoi d'e-mails n'est pas configuré. Ajoutez la clé API Brevo et l'adresse d'expéditeur vérifiée dans l'environnement du serveur.</p>{% endif %}
                 <p class="mt-2 text-[11px] text-slate-500">Configuration serveur : BREVO_API_KEY, BREVO_SENDER_EMAIL, BREVO_SENDER_NAME (facultatif) et APP_BASE_URL, qui doit pointer vers l'adresse HTTPS publique de l'application.</p>
             </div>
@@ -2835,6 +2847,10 @@ SETTINGS_TEMPLATE = (
                         <form action="{{ url_for('toggle_user', user_id=account.id) }}" method="POST">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-xs font-medium {% if account.active %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ 'Désactiver' if account.active else 'Réactiver' }}</button>
+                        </form>
+                        <form action="{{ url_for('delete_user', user_id=account.id) }}" method="POST" onsubmit="return confirm('Supprimer définitivement le compte « {{ account.username }} » ? Les mouvements de stock seront conservés sans le nom de cet utilisateur.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="text-xs font-medium text-rose-700 hover:underline">Supprimer</button>
                         </form>
                         {% else %}
                         <span class="text-slate-400">Votre compte</span>
@@ -3995,30 +4011,43 @@ def edit_article(id):
 
 @app.route("/settings")
 def settings_view():
+  section = request.args.get("section", "home")
+  if section not in {"home", "locations", "equipment", "users"}:
+    abort(404)
+  if section == "users":
+    require_admin()
+
   db = get_db()
   cur = db.cursor()
-  cur.execute(
-      "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
-      (g.current_site["id"],),
-  )
-  locations = cur.fetchall()
-  cur.execute("""
-        SELECT e.*, l.name as loc_name 
-        FROM equipment e 
-        LEFT JOIN locations l ON e.location_id = l.id 
-        WHERE e.site_id = %s
-        ORDER BY e.name
-    """, (g.current_site["id"],))
-  equipment = cur.fetchall()
-  cur.execute(
-      "SELECT id, username, email, password_hash, role, active FROM users ORDER BY username"
-  )
-  users = cur.fetchall() if g.current_user["role"] == "admin" else []
+  locations = []
+  equipment = []
+  users = []
+  if section in {"locations", "equipment"}:
+    cur.execute(
+        "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
+        (g.current_site["id"],),
+    )
+    locations = cur.fetchall()
+  if section == "equipment":
+    cur.execute("""
+          SELECT e.*, l.name as loc_name 
+          FROM equipment e 
+          LEFT JOIN locations l ON e.location_id = l.id 
+          WHERE e.site_id = %s
+          ORDER BY e.name
+      """, (g.current_site["id"],))
+    equipment = cur.fetchall()
+  if section == "users":
+    cur.execute(
+        "SELECT id, username, email, password_hash, role, active FROM users ORDER BY username"
+    )
+    users = cur.fetchall()
   cur.close()
   total_val = calculate_total_stock_value()
   return render_template_string(
       SETTINGS_TEMPLATE,
       active_page="settings",
+      section=section,
       locations=locations,
       equipment=equipment,
       users=users,
@@ -4063,7 +4092,7 @@ def add_user():
     db.rollback()
     cur.close()
     flash("Cet identifiant existe déjà.", "error")
-    return redirect(url_for("settings_view"))
+    return redirect(url_for("settings_view", section="users"))
   db.commit()
   cur.close()
   try:
@@ -4078,12 +4107,12 @@ def add_user():
     )
     flash(
         f"Le compte « {username} » a été créé, mais l'e-mail n'a pas pu être envoyé. "
-        "Vérifiez la configuration SMTP puis renvoyez le lien.",
+        "Vérifiez la configuration Brevo puis renvoyez le lien.",
         "error",
     )
-    return redirect(url_for("settings_view"))
+    return redirect(url_for("settings_view", section="users"))
   flash(f"Le compte « {username} » a été créé et le lien envoyé à {email}.", "success")
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="users"))
 
 
 @app.route("/users/<int:user_id>/toggle", methods=["POST"])
@@ -4117,7 +4146,38 @@ def toggle_user(user_id):
   db.commit()
   cur.close()
   flash("Le statut du compte a été modifié.", "success")
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="users"))
+
+
+@app.route("/users/<int:user_id>/delete", methods=["POST"])
+def delete_user(user_id):
+  require_admin()
+  if user_id == g.current_user["id"]:
+    abort(400, description="Vous ne pouvez pas supprimer votre propre compte.")
+
+  db = get_db()
+  cur = db.cursor()
+  cur.execute("SELECT pg_advisory_xact_lock(73401219078124::bigint)")
+  cur.execute(
+      "SELECT username, role, active FROM users WHERE id = %s FOR UPDATE",
+      (user_id,),
+  )
+  account = cur.fetchone()
+  if account is None:
+    cur.close()
+    abort(404)
+  if account["role"] == "admin" and account["active"]:
+    cur.execute("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = TRUE")
+    if cur.fetchone()["count"] <= 1:
+      db.rollback()
+      cur.close()
+      abort(400, description="Impossible de supprimer le dernier administrateur actif.")
+
+  cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+  db.commit()
+  cur.close()
+  flash(f"Le compte « {account['username']} » a été supprimé.", "success")
+  return redirect(url_for("settings_view", section="users"))
 
 
 @app.route("/users/<int:user_id>/password", methods=["POST"])
@@ -4134,7 +4194,7 @@ def reset_user_password(user_id):
     abort(404)
   if not account["email"]:
     flash("Ajoutez d'abord une adresse e-mail à ce compte.", "error")
-    return redirect(url_for("settings_view"))
+    return redirect(url_for("settings_view", section="users"))
   try:
     sent = issue_password_link(
         user_id, account["email"], account["username"], "Réinitialiser"
@@ -4145,13 +4205,13 @@ def reset_user_password(user_id):
         type(error).__name__,
         error,
     )
-    flash("L'e-mail n'a pas pu être envoyé. Vérifiez la configuration SMTP.", "error")
-    return redirect(url_for("settings_view"))
+    flash("L'e-mail n'a pas pu être envoyé. Vérifiez la configuration Brevo.", "error")
+    return redirect(url_for("settings_view", section="users"))
   if sent:
     flash(f"Un lien de réinitialisation a été envoyé à {account['email']}.", "success")
   else:
     flash("Un lien a déjà été envoyé récemment. Veuillez patienter une minute.", "error")
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="users"))
 
 
 @app.route("/users/<int:user_id>/email", methods=["POST"])
@@ -4175,7 +4235,7 @@ def update_user_email(user_id):
     db.rollback()
     cur.close()
     flash("Cette adresse e-mail est déjà associée à un autre compte.", "error")
-    return redirect(url_for("settings_view"))
+    return redirect(url_for("settings_view", section="users"))
   account = cur.fetchone()
   if account is None:
     cur.close()
@@ -4198,15 +4258,15 @@ def update_user_email(user_id):
     )
     flash(
         "L'adresse a été enregistrée, mais l'e-mail n'a pas pu être envoyé. "
-        "Vérifiez la configuration SMTP puis réessayez.",
+        "Vérifiez la configuration Brevo puis réessayez.",
         "error",
     )
-    return redirect(url_for("settings_view"))
+    return redirect(url_for("settings_view", section="users"))
   if sent:
     flash(f"L'adresse a été enregistrée et le lien envoyé à {email}.", "success")
   else:
     flash("L'adresse a été enregistrée. Un lien a déjà été envoyé récemment.", "error")
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="users"))
 
 
 @app.route("/account/password", methods=["POST"])
@@ -4261,7 +4321,7 @@ def add_location():
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="locations"))
 
 
 @app.route("/edit_location/<int:id>", methods=["POST"])
@@ -4277,7 +4337,7 @@ def edit_location(id):
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="locations"))
 
 
 @app.route("/delete_location/<int:id>", methods=["POST"])
@@ -4290,7 +4350,7 @@ def delete_location(id):
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="locations"))
 
 
 @app.route("/add_equipment", methods=["POST"])
@@ -4308,7 +4368,7 @@ def add_equipment():
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="equipment"))
 
 
 @app.route("/edit_equipment/<int:id>", methods=["POST"])
@@ -4326,7 +4386,7 @@ def edit_equipment(id):
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="equipment"))
 
 
 @app.route("/delete_equipment/<int:id>", methods=["POST"])
@@ -4339,7 +4399,7 @@ def delete_equipment(id):
   )
   db.commit()
   cur.close()
-  return redirect(url_for("settings_view"))
+  return redirect(url_for("settings_view", section="equipment"))
 
 
 @app.route("/add", methods=["POST"])
