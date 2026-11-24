@@ -1701,9 +1701,16 @@ ENTRY_TEMPLATE = (
 
         {% if preselected_article_found %}
         <section class="rounded-xl border border-emerald-300 bg-emerald-50 p-4 shadow-sm" role="status">
-            <p class="text-xs font-bold uppercase tracking-wide text-emerald-800">Article sélectionné pour la sortie</p>
-            <p class="mt-1 text-lg font-extrabold text-emerald-950">{{ selected_article.name }}</p>
-            <p class="text-sm text-emerald-900">Réf. : {{ selected_article.reference or '—' }} · Stock disponible : {{ selected_article.quantity }}{% if selected_article.loc_name %} · {{ selected_article.loc_name }}{% endif %}</p>
+            <div class="flex items-center gap-4">
+                {% if selected_article.image_filename %}
+                <img src="{{ url_for('uploaded_file', filename=selected_article.image_filename, variant='thumb') }}" alt="Photo de {{ selected_article.name }}" loading="lazy" decoding="async" class="h-20 w-20 shrink-0 rounded-lg border border-emerald-200 bg-white object-contain" onerror="this.remove()">
+                {% endif %}
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wide text-emerald-800">Article sélectionné pour la sortie</p>
+                    <p class="mt-1 text-lg font-extrabold text-emerald-950">{{ selected_article.name }}</p>
+                    <p class="text-sm text-emerald-900">Réf. : {{ selected_article.reference or '—' }} · Stock disponible : {{ selected_article.quantity }}{% if selected_article.loc_name %} · {{ selected_article.loc_name }}{% endif %}</p>
+                </div>
+            </div>
         </section>
         {% endif %}
 
@@ -1725,7 +1732,8 @@ ENTRY_TEMPLATE = (
             <div class="mt-3 space-y-2">
                 {% for item in search_results %}
                 <a href="{{ url_for('stock_exit', method='keyword', article_id=item.id, q=search_query) }}#stock-exit" class="flex min-h-14 flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-emerald-700 hover:bg-emerald-50 sm:flex-row sm:items-center sm:justify-between">
-                    <span class="min-w-0">
+                    {% if item.image_filename %}<img src="{{ url_for('uploaded_file', filename=item.image_filename, variant='thumb') }}" alt="Photo de {{ item.name }}" loading="lazy" decoding="async" class="h-16 w-16 shrink-0 self-center rounded-lg border border-slate-200 bg-white object-contain" onerror="this.remove()">{% else %}<span class="flex h-16 w-16 shrink-0 items-center justify-center self-center rounded-lg border border-slate-200 bg-white text-2xl text-slate-300" aria-hidden="true">📦</span>{% endif %}
+                    <span class="min-w-0 flex-1">
                         <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
                         <span class="mt-1 block text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.loc_name %} · {{ item.loc_name }}{% endif %}</span>
                     </span>
@@ -1772,7 +1780,8 @@ ENTRY_TEMPLATE = (
             <div class="mt-4 space-y-2">
                 {% for item in articles %}
                 <a href="{{ url_for('stock_exit', method='location', location_id=current_location_id, article_id=item.id) }}#stock-exit" class="flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 hover:border-emerald-700 hover:bg-emerald-50">
-                    <span><span class="block text-sm font-bold text-slate-900">{{ item.name }}</span><span class="text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}</span></span>
+                    {% if item.image_filename %}<img src="{{ url_for('uploaded_file', filename=item.image_filename, variant='thumb') }}" alt="Photo de {{ item.name }}" loading="lazy" decoding="async" class="h-16 w-16 shrink-0 rounded-lg border border-slate-200 bg-white object-contain" onerror="this.remove()">{% else %}<span class="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-2xl text-slate-300" aria-hidden="true">📦</span>{% endif %}
+                    <span class="flex-1"><span class="block text-sm font-bold text-slate-900">{{ item.name }}</span><span class="text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}</span></span>
                     <span class="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">Choisir</span>
                 </a>
                 {% else %}<p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article dans ce lieu.</p>{% endfor %}
@@ -1800,7 +1809,8 @@ ENTRY_TEMPLATE = (
             <div class="mt-4 space-y-2">
                 {% for item in articles %}
                 <a href="{{ url_for('stock_exit', method='equipment', equipment_id=current_equipment_id, article_id=item.id) }}#stock-exit" class="flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 hover:border-emerald-700 hover:bg-emerald-50">
-                    <span><span class="block text-sm font-bold text-slate-900">{{ item.name }}</span><span class="text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}</span></span>
+                    {% if item.image_filename %}<img src="{{ url_for('uploaded_file', filename=item.image_filename, variant='thumb') }}" alt="Photo de {{ item.name }}" loading="lazy" decoding="async" class="h-16 w-16 shrink-0 rounded-lg border border-slate-200 bg-white object-contain" onerror="this.remove()">{% else %}<span class="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-2xl text-slate-300" aria-hidden="true">📦</span>{% endif %}
+                    <span class="flex-1"><span class="block text-sm font-bold text-slate-900">{{ item.name }}</span><span class="text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}</span></span>
                     <span class="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">Choisir</span>
                 </a>
                 {% else %}<p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article associé à cet équipement.</p>{% endfor %}
