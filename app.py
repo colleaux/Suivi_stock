@@ -1688,24 +1688,44 @@ ENTRY_TEMPLATE = (
         {% endif %}
 
         {% if operation_page == 'exit' %}
-        <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <h2 class="text-base font-bold text-slate-900">Rechercher un article par mot-clé</h2>
+        <nav class="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Méthodes de recherche d’article">
+            <a href="#exit-keyword" class="rounded-lg border border-slate-200 bg-white p-3 text-center text-sm font-bold text-slate-800 shadow-sm hover:border-emerald-600 hover:bg-emerald-50"><span class="block text-xl" aria-hidden="true">⌕</span>Mot-clé</a>
+            <a href="#exit-qr" class="rounded-lg border border-slate-200 bg-white p-3 text-center text-sm font-bold text-slate-800 shadow-sm hover:border-emerald-600 hover:bg-emerald-50"><span class="block text-xl" aria-hidden="true">▦</span>QR code</a>
+            <a href="#exit-location" class="rounded-lg border border-slate-200 bg-white p-3 text-center text-sm font-bold text-slate-800 shadow-sm hover:border-emerald-600 hover:bg-emerald-50"><span class="block text-xl" aria-hidden="true">⌖</span>Lieu de stockage</a>
+            <a href="#exit-equipment" class="rounded-lg border border-slate-200 bg-white p-3 text-center text-sm font-bold text-slate-800 shadow-sm hover:border-emerald-600 hover:bg-emerald-50"><span class="block text-xl" aria-hidden="true">⚙</span>Équipement</a>
+        </nav>
+
+        {% if preselected_article_found %}
+        <section class="rounded-xl border border-emerald-300 bg-emerald-50 p-4 shadow-sm" role="status">
+            <p class="text-xs font-bold uppercase tracking-wide text-emerald-800">Article sélectionné pour la sortie</p>
+            <p class="mt-1 text-lg font-extrabold text-emerald-950">{{ selected_article.name }}</p>
+            <p class="text-sm text-emerald-900">Réf. : {{ selected_article.reference or '—' }} · Stock disponible : {{ selected_article.quantity }}{% if selected_article.loc_name %} · {{ selected_article.loc_name }}{% endif %}</p>
+        </section>
+        {% endif %}
+
+        <section id="exit-keyword" class="scroll-mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div class="flex items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xl" aria-hidden="true">⌕</span>
+                <div><h2 class="text-base font-bold text-slate-900">1. Rechercher par mot-clé</h2><p class="mt-1 text-sm text-slate-600">Saisissez le nom ou la référence de l’article.</p></div>
+            </div>
             <form method="GET" action="{{ url_for('stock_exit') }}" class="mt-3 flex flex-col gap-2 sm:flex-row">
                 <label for="exit-article-search" class="sr-only">Désignation ou référence de l’article</label>
-                <input id="exit-article-search" type="search" name="q" value="{{ search_query }}" placeholder="Désignation ou référence…" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-4 text-base focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                <input id="exit-article-search" type="search" name="q" value="{{ search_query }}" placeholder="Ex. siphon, SIDER 135626…" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-4 text-base focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                <input type="hidden" name="location_id" value="{{ current_location_id or '' }}">
+                <input type="hidden" name="equipment_id" value="{{ current_equipment_id or '' }}">
                 <button type="submit" class="min-h-12 rounded-lg bg-emerald-800 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-900">Rechercher</button>
-                {% if search_query %}<a href="{{ url_for('stock_exit') }}" class="flex min-h-12 items-center justify-center rounded-lg bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">Effacer</a>{% endif %}
+                {% if search_query or current_location_id or current_equipment_id %}<a href="{{ url_for('stock_exit') }}" class="flex min-h-12 items-center justify-center rounded-lg bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">Effacer les filtres</a>{% endif %}
             </form>
             {% if search_query %}
             <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">{{ search_results|length }} résultat(s) pour « {{ search_query }} »{% if search_results|length == 50 %} — seuls les 50 premiers sont affichés{% endif %}.</p>
             <div class="mt-3 space-y-2">
                 {% for item in search_results %}
-                <a href="{{ url_for('stock_exit', article_id=item.id, q=search_query) }}" class="flex min-h-14 flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-emerald-700 hover:bg-emerald-50 sm:flex-row sm:items-center sm:justify-between">
+                <a href="{{ url_for('stock_exit', article_id=item.id, q=search_query, location_id=current_location_id or '', equipment_id=current_equipment_id or '') }}#stock-exit" class="flex min-h-14 flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-emerald-700 hover:bg-emerald-50 sm:flex-row sm:items-center sm:justify-between">
                     <span class="min-w-0">
                         <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
                         <span class="mt-1 block text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.loc_name %} · {{ item.loc_name }}{% endif %}</span>
                     </span>
-                    <span class="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-center text-xs font-bold text-white">Sélectionner pour sortie</span>
+                    <span class="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-center text-xs font-bold text-white">Choisir cet article</span>
                 </a>
                 {% else %}
                 <p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article trouvé. Essayez une autre désignation ou référence.</p>
@@ -1713,12 +1733,63 @@ ENTRY_TEMPLATE = (
             </div>
             {% endif %}
         </section>
+
+        <section id="exit-qr" class="scroll-mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div class="flex items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-xl" aria-hidden="true">▦</span>
+                <div><h2 class="text-base font-bold text-slate-900">2. Rechercher par QR code</h2><p class="mt-1 text-sm text-slate-600">Autorisez l’accès à la caméra et placez le QR code de l’article dans le cadre.</p></div>
+            </div>
+            <button type="button" id="start-qr-scanner" class="mt-4 min-h-11 rounded-lg bg-sky-800 px-4 py-2 text-sm font-bold text-white hover:bg-sky-900">📷 Scanner un QR code</button>
+            <div id="qr-reader" class="mt-3 hidden max-w-md overflow-hidden rounded-lg bg-black">
+                <video id="qr-video" class="aspect-video w-full object-cover" autoplay muted playsinline></video>
+            </div>
+            <p id="qr-scan-status" class="mt-2 text-sm text-slate-700" role="status" aria-live="polite"></p>
+        </section>
+
+        <section id="exit-location" class="scroll-mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div class="flex items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xl" aria-hidden="true">⌖</span>
+                <div><h2 class="text-base font-bold text-slate-900">3. Rechercher par lieu de stockage</h2><p class="mt-1 text-sm text-slate-600">Choisissez un lieu pour limiter la liste des articles disponibles.</p></div>
+            </div>
+            <form method="GET" action="{{ url_for('stock_exit') }}" class="mt-3 flex flex-col gap-2 sm:flex-row">
+                <label for="exit-location-filter" class="sr-only">Lieu de stockage</label>
+                <select id="exit-location-filter" name="location_id" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm">
+                    <option value="">Tous les lieux</option>
+                    {% for location in locations %}<option value="{{ location.id }}" {% if current_location_id == location.id %}selected{% endif %}>{{ location.name }}</option>{% endfor %}
+                </select>
+                <input type="hidden" name="q" value="{{ search_query }}">
+                <input type="hidden" name="equipment_id" value="{{ current_equipment_id or '' }}">
+                <button type="submit" class="min-h-12 rounded-lg bg-emerald-800 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-900">Afficher les articles</button>
+            </form>
+        </section>
+
+        <section id="exit-equipment" class="scroll-mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div class="flex items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xl" aria-hidden="true">⚙</span>
+                <div><h2 class="text-base font-bold text-slate-900">4. Rechercher par équipement</h2><p class="mt-1 text-sm text-slate-600">Choisissez une machine ou un équipement pour afficher ses articles.</p></div>
+            </div>
+            <form method="GET" action="{{ url_for('stock_exit') }}" class="mt-3 flex flex-col gap-2 sm:flex-row">
+                <label for="exit-equipment-filter" class="sr-only">Équipement</label>
+                <select id="exit-equipment-filter" name="equipment_id" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm">
+                    <option value="">Tous les équipements</option>
+                    {% for item in equipment %}<option value="{{ item.id }}" {% if current_equipment_id == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+                </select>
+                <input type="hidden" name="q" value="{{ search_query }}">
+                <input type="hidden" name="location_id" value="{{ current_location_id or '' }}">
+                <button type="submit" class="min-h-12 rounded-lg bg-emerald-800 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-900">Afficher les articles</button>
+            </form>
+        </section>
+
+        {% if preselected_article_id and not preselected_article_found %}
+        <p class="rounded-lg bg-rose-50 p-3 text-sm text-rose-800" role="alert">Cet article n’existe plus dans l’inventaire de ce site. Vérifiez le QR code ou recherchez un autre article.</p>
+        {% endif %}
+
         <section id="stock-exit" class="scroll-mt-4 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
             <div class="flex items-start gap-4 border-b border-amber-100 bg-amber-50 p-4 sm:p-6">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-amber-950" aria-hidden="true">−</span>
                 <div>
-                    <h2 class="text-lg font-extrabold text-amber-950 sm:text-xl">Sortie de Stock</h2>
-                    <p class="mt-1 text-sm text-amber-900">Enregistrez le matériel prélevé et indiquez la quantité ainsi que le motif.</p>
+                    <h2 class="text-lg font-extrabold text-amber-950 sm:text-xl">Confirmer la sortie</h2>
+                    <p class="mt-1 text-sm text-amber-900">Sélectionnez l’article, puis renseignez la quantité prélevée et le motif.</p>
                 </div>
             </div>
             <div class="p-4 sm:p-6">
@@ -1726,27 +1797,18 @@ ENTRY_TEMPLATE = (
 
                     <form action="/movement_exit" method="POST" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                            <p class="text-sm font-bold text-amber-950">Scanner le QR code de l’article</p>
-                            <p class="mt-1 text-xs text-amber-900">Autorisez l’accès à la caméra, puis placez le QR code dans le cadre. Vous pouvez aussi choisir l’article dans la liste ci-dessous.</p>
-                            <button type="button" id="start-qr-scanner" class="mt-3 min-h-11 rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">📷 Scanner un QR code</button>
-                            <div id="qr-reader" class="mt-3 hidden max-w-md overflow-hidden rounded-lg bg-black">
-                                <video id="qr-video" class="aspect-video w-full object-cover" autoplay muted playsinline></video>
-                            </div>
-                            <p id="qr-scan-status" class="mt-2 text-sm text-slate-700" role="status" aria-live="polite"></p>
-                        </div>
                         <div>
+                            <p class="mb-2 text-xs text-slate-600">{{ articles|length }} article(s) proposé(s) selon les critères de recherche.</p>
                             <label class="block text-xs font-semibold text-slate-600 mb-1">Article à prélever *</label>
                             <select id="exit-article-id" name="article_id" required class="w-full text-xs p-2.5 border border-slate-300 rounded bg-white">
-                                <option value="">-- Choisir une pièce --</option>
+                                <option value="">-- Choisir un article dans les résultats ci-dessus --</option>
                                 {% for item in articles %}
-                                <option value="{{ item.id }}" {% if preselected_article_id == item.id %}selected{% endif %}>{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Qte dispo: {{ item.quantity }}</option>
+                                <option value="{{ item.id }}" {% if preselected_article_id == item.id %}selected{% endif %}>{{ item.name }} (Réf: {{ item.reference or 'N/C' }}) | Stock : {{ item.quantity }}</option>
+                                {% else %}
+                                <option value="" disabled>Aucun article ne correspond aux critères</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        {% if preselected_article_id and not preselected_article_found %}
-                        <p class="rounded-lg bg-rose-50 p-3 text-sm text-rose-800" role="alert">Cet article n’existe plus dans l’inventaire. Vérifiez le QR code ou choisissez un article dans la liste.</p>
-                        {% endif %}
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
@@ -1814,8 +1876,8 @@ ENTRY_TEMPLATE = (
             const reader = document.getElementById("qr-reader");
             const video = document.getElementById("qr-video");
             const status = document.getElementById("qr-scan-status");
-            const articleSelect = document.getElementById("exit-article-id");
             const activeSiteId = "{{ g.current_site.id }}";
+            const exitUrl = "{{ url_for('stock_exit') }}";
             const canvas = document.createElement("canvas");
             const context = canvas.getContext("2d", { willReadFrequently: true });
             let mediaStream = null;
@@ -1885,20 +1947,11 @@ ENTRY_TEMPLATE = (
                                 lastInvalidText = result.data;
                             }
                         } else {
-                            const option = Array.from(articleSelect.options).find(
-                                (item) => item.value === articleId
-                            );
-                            if (!option) {
-                                status.textContent = "Article introuvable. Actualisez la page puis réessayez.";
-                            } else {
-                                articleSelect.value = articleId;
-                                status.textContent = "Article sélectionné : " + option.text;
-                                stopScanner();
-                                startButton.textContent = "📷 Scanner un autre article";
-                                document.getElementById("exit-quantity").focus();
-                                document.getElementById("stock-exit").scrollIntoView({ behavior: "smooth" });
-                                return;
-                            }
+                            stopScanner();
+                            const selectedUrl = new URL(exitUrl, window.location.origin);
+                            selectedUrl.searchParams.set("article_id", articleId);
+                            window.location.href = selectedUrl.href + "#stock-exit";
+                            return;
                         }
                     }
                 }
@@ -3677,11 +3730,28 @@ def entry_form():
 @app.route("/exit")
 def stock_exit():
   search_query = request.args.get("q", "").strip()
+  current_location_id = optional_integer(
+      request.args.get("location_id"), "location_id"
+  )
+  current_equipment_id = optional_integer(
+      request.args.get("equipment_id"), "equipment_id"
+  )
   preselected_article_id = optional_integer(
       request.args.get("article_id"), "article_id"
   )
   db = get_db()
   cur = db.cursor()
+  cur.execute(
+      "SELECT id, name FROM locations WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
+  locations = cur.fetchall()
+  cur.execute(
+      "SELECT id, name FROM equipment WHERE site_id = %s ORDER BY name",
+      (g.current_site["id"],),
+  )
+  equipment = cur.fetchall()
+
   article_query = """
       SELECT a.*, COALESCE(l.name, equipment_location.name) AS loc_name
       FROM articles a
@@ -3691,41 +3761,54 @@ def stock_exit():
       WHERE a.site_id = %s
   """
   article_params = [g.current_site["id"]]
+  if current_location_id:
+    article_query += " AND COALESCE(a.location_id, e.location_id) = %s"
+    article_params.append(current_location_id)
+  if current_equipment_id:
+    article_query += " AND a.equipment_id = %s"
+    article_params.append(current_equipment_id)
   if search_query:
     for term in search_query.split():
       escaped_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
       article_query += """
-          AND (a.name ILIKE %s ESCAPE '\\'
-               OR COALESCE(a.reference, '') ILIKE %s ESCAPE '\\')
+          AND (a.name ILIKE %s OR COALESCE(a.reference, '') ILIKE %s)
       """
       article_params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
-  article_query += " ORDER BY a.name LIMIT 50"
+  article_query += " ORDER BY a.name"
+  if search_query:
+    article_query += " LIMIT 50"
   cur.execute(article_query, article_params)
-  search_results = cur.fetchall() if search_query else []
-
-  cur.execute(
-      """
-          SELECT a.*, COALESCE(l.name, equipment_location.name) AS loc_name
-          FROM articles a
-          LEFT JOIN locations l ON l.id = a.location_id
-          LEFT JOIN equipment e ON e.id = a.equipment_id
-          LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
-          WHERE a.site_id = %s
-          ORDER BY a.name
-      """,
-      (g.current_site["id"],),
-  )
   articles = cur.fetchall()
-  cur.close()
+  search_results = articles if search_query else []
   selected_article = next(
       (item for item in articles if item["id"] == preselected_article_id),
       None,
   )
+  if preselected_article_id and selected_article is None:
+    cur.execute(
+        """
+            SELECT a.*, COALESCE(l.name, equipment_location.name) AS loc_name
+            FROM articles a
+            LEFT JOIN locations l ON l.id = a.location_id
+            LEFT JOIN equipment e ON e.id = a.equipment_id
+            LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+            WHERE a.id = %s AND a.site_id = %s
+        """,
+        (preselected_article_id, g.current_site["id"]),
+    )
+    selected_article = cur.fetchone()
+    if selected_article:
+      articles.insert(0, selected_article)
+  cur.close()
   return render_template_string(
       ENTRY_TEMPLATE,
       active_page="exit",
       operation_page="exit",
       articles=articles,
+      locations=locations,
+      equipment=equipment,
+      current_location_id=current_location_id,
+      current_equipment_id=current_equipment_id,
       total_stock_value=calculate_total_stock_value(),
       preselected_article_id=preselected_article_id,
       preselected_article_found=selected_article is not None,
