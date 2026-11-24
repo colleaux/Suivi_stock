@@ -1021,7 +1021,7 @@ def choose_site():
     if article_id:
       if action == "exit":
         return redirect(
-            url_for("entry_form", article_id=article_id, mode="exit")
+            url_for("stock_exit", article_id=article_id)
         )
       return redirect(url_for("edit_article", id=article_id))
     return redirect(url_for("home"))
@@ -1422,8 +1422,11 @@ LAYOUT_HEADER = """
                         <span class="text-emerald-200">SITE :</span> {{ g.current_site.name }} <span aria-hidden="true">⌄</span>
                     </a>
                     <span class="col-span-2 text-center px-2 py-1 text-[10px] text-emerald-200 sm:col-span-1">{{ g.current_user.username }}</span>
-                    <a href="/entry" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
-                        <span>✏️</span> Entrée / Sortie
+                    <a href="{{ url_for('entry_form') }}" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'entry' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                        <span>＋</span> Entrée de stock
+                    </a>
+                    <a href="{{ url_for('stock_exit') }}" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'exit' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
+                        <span>−</span> Sortie de stock
                     </a>
                     <a href="/stock" class="min-h-11 px-2 sm:px-3.5 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 {% if active_page == 'stock' %}bg-forest-light text-emerald-300 border border-emerald-600 shadow-sm{% else %}text-emerald-100 hover:bg-forest-light hover:text-white{% endif %}">
                         <span>📊</span> Suivi & Rapport
@@ -1487,7 +1490,10 @@ DASHBOARD_TEMPLATE = (
                 <span class="text-3xl" aria-hidden="true">📦</span><span class="text-base font-extrabold text-slate-900">Consulter le stock</span>
             </a>
             <a href="{{ url_for('entry_form') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
-                <span class="text-3xl" aria-hidden="true">↕️</span><span class="text-base font-extrabold text-slate-900">Entrée / sortie</span>
+                <span class="text-3xl" aria-hidden="true">＋</span><span class="text-base font-extrabold text-slate-900">Entrée de stock</span>
+            </a>
+            <a href="{{ url_for('stock_exit') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
+                <span class="text-3xl" aria-hidden="true">−</span><span class="text-base font-extrabold text-slate-900">Sortie de stock</span>
             </a>
             <a href="{{ url_for('movement_report') }}" class="flex min-h-32 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200 sm:min-h-40 sm:p-5">
                 <span class="text-3xl" aria-hidden="true">🧾</span><span class="text-base font-extrabold text-slate-900">Historique des mouvements</span>
@@ -1508,42 +1514,42 @@ DASHBOARD_TEMPLATE = (
 )
 
 # --- 1. PAGE DE SAISIE DE DONNÉES ---
+OPERATION_CHOICE_TEMPLATE = (
+    LAYOUT_HEADER
+    + """
+    <div class="mx-auto max-w-3xl space-y-5">
+        <section class="rounded-xl bg-gradient-to-r from-emerald-950 to-emerald-800 p-5 text-white shadow-md sm:p-7">
+            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Article scanné</p>
+            <h1 class="mt-1 text-2xl font-extrabold">{{ selected_article.name }}</h1>
+            <p class="mt-2 text-sm text-emerald-100">Référence : {{ selected_article.reference or 'Non renseignée' }} · Stock disponible : {{ selected_article.quantity }}</p>
+            <p class="mt-4 text-sm text-emerald-100">Choisissez une opération. Chaque opération s’effectue sur sa propre page.</p>
+        </section>
+        <div class="grid gap-3 sm:grid-cols-2">
+            <a href="{{ url_for('entry_form', article_id=selected_article.id, mode='entry') }}" class="flex min-h-24 items-center gap-4 rounded-xl border border-emerald-200 bg-white p-5 font-bold text-emerald-950 shadow-sm hover:bg-emerald-50">
+                <span class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-2xl" aria-hidden="true">＋</span>
+                <span>Entrée de stock</span>
+            </a>
+            <a href="{{ url_for('stock_exit', article_id=selected_article.id) }}" class="flex min-h-24 items-center gap-4 rounded-xl border border-amber-200 bg-white p-5 font-bold text-amber-950 shadow-sm hover:bg-amber-50">
+                <span class="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-2xl" aria-hidden="true">−</span>
+                <span>Sortie de stock</span>
+            </a>
+        </div>
+    </div>
+"""
+    + LAYOUT_FOOTER
+)
+
 ENTRY_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="max-w-5xl mx-auto space-y-6">
         <div class="rounded-xl bg-gradient-to-r from-emerald-950 to-emerald-800 p-5 sm:p-7 text-white shadow-md">
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Gestion des mouvements</p>
-            <h1 class="mt-1 text-2xl sm:text-3xl font-extrabold">Entrée et sortie de stock</h1>
-            <p class="mt-2 max-w-2xl text-sm text-emerald-100">Choisissez l’opération à effectuer. Chaque mouvement est enregistré dans l’historique de l’inventaire.</p>
-            <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <a href="{% if preselected_article_found %}#existing-entry{% else %}#stock-entry{% endif %}" class="flex min-h-14 items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-left font-bold text-emerald-950 shadow transition hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-300">
-                    <span class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-xl" aria-hidden="true">＋</span>Entrée de Stock</span>
-                    <span aria-hidden="true">↓</span>
-                </a>
-                <a href="#stock-exit" class="flex min-h-14 items-center justify-between gap-3 rounded-lg border border-emerald-400 bg-emerald-900/50 px-4 py-3 text-left font-bold text-white transition hover:bg-emerald-900 focus:outline-none focus:ring-4 focus:ring-emerald-300">
-                    <span class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-full bg-amber-300 text-xl text-amber-950" aria-hidden="true">−</span>Sortie de Stock</span>
-                    <span aria-hidden="true">↓</span>
-                </a>
-            </div>
+            <h1 class="mt-1 text-2xl sm:text-3xl font-extrabold">{{ "Entrée de stock" if operation_page == "entry" else "Sortie de stock" }}</h1>
+            <p class="mt-2 max-w-2xl text-sm text-emerald-100">{% if operation_page == "entry" %}Enregistrez une réception ou créez une nouvelle fiche article.{% else %}Recherchez l’article à prélever, puis indiquez la quantité et le motif.{% endif %} Chaque mouvement est conservé dans l’historique.</p>
         </div>
 
-        {% if preselected_article_found %}
-        <section id="operation-choice" class="scroll-mt-4 rounded-xl border border-sky-200 bg-white p-4 shadow-sm sm:p-6">
-            <p class="text-xs font-bold uppercase tracking-wide text-sky-800">Article scanné</p>
-            <h2 class="mt-1 text-lg font-extrabold text-slate-900">{{ selected_article.name }}</h2>
-            <p class="text-sm text-slate-600">Référence : {{ selected_article.reference or 'Non renseignée' }} · Stock disponible : {{ selected_article.quantity }}</p>
-            <p class="mt-4 text-sm font-semibold text-slate-800">Quelle opération souhaitez-vous effectuer ?</p>
-            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <a href="#existing-entry" class="flex min-h-14 items-center justify-center gap-2 rounded-lg bg-emerald-800 px-4 py-3 text-center font-bold text-white hover:bg-emerald-900">
-                    <span aria-hidden="true">＋</span> Entrée de stock
-                </a>
-                <a href="#stock-exit" class="flex min-h-14 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-center font-bold text-white hover:bg-amber-700">
-                    <span aria-hidden="true">−</span> Sortie de stock
-                </a>
-            </div>
-        </section>
-
+        {% if operation_page == 'entry' and preselected_article_found %}
         <section id="existing-entry" class="scroll-mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
             <div class="border-b border-emerald-100 bg-emerald-50 p-4 sm:p-6">
                 <h2 class="text-lg font-extrabold text-emerald-950">Entrée de Stock</h2>
@@ -1575,7 +1581,7 @@ ENTRY_TEMPLATE = (
         </section>
         {% endif %}
 
-        {% if not preselected_article_found %}
+        {% if operation_page == 'entry' and not preselected_article_found %}
         <section id="stock-entry" class="scroll-mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
             <div class="flex items-start gap-4 border-b border-emerald-100 bg-emerald-50 p-4 sm:p-6">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-2xl font-bold text-white" aria-hidden="true">＋</span>
@@ -1681,6 +1687,32 @@ ENTRY_TEMPLATE = (
         </section>
         {% endif %}
 
+        {% if operation_page == 'exit' %}
+        <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 class="text-base font-bold text-slate-900">Rechercher un article par mot-clé</h2>
+            <form method="GET" action="{{ url_for('stock_exit') }}" class="mt-3 flex flex-col gap-2 sm:flex-row">
+                <label for="exit-article-search" class="sr-only">Désignation ou référence de l’article</label>
+                <input id="exit-article-search" type="search" name="q" value="{{ search_query }}" placeholder="Désignation ou référence…" class="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-4 text-base focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                <button type="submit" class="min-h-12 rounded-lg bg-emerald-800 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-900">Rechercher</button>
+                {% if search_query %}<a href="{{ url_for('stock_exit') }}" class="flex min-h-12 items-center justify-center rounded-lg bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">Effacer</a>{% endif %}
+            </form>
+            {% if search_query %}
+            <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">{{ search_results|length }} résultat(s) pour « {{ search_query }} »{% if search_results|length == 50 %} — seuls les 50 premiers sont affichés{% endif %}.</p>
+            <div class="mt-3 space-y-2">
+                {% for item in search_results %}
+                <a href="{{ url_for('stock_exit', article_id=item.id, q=search_query) }}" class="flex min-h-14 flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-emerald-700 hover:bg-emerald-50 sm:flex-row sm:items-center sm:justify-between">
+                    <span class="min-w-0">
+                        <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
+                        <span class="mt-1 block text-xs text-slate-600">Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.loc_name %} · {{ item.loc_name }}{% endif %}</span>
+                    </span>
+                    <span class="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-center text-xs font-bold text-white">Sélectionner pour sortie</span>
+                </a>
+                {% else %}
+                <p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun article trouvé. Essayez une autre désignation ou référence.</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
         <section id="stock-exit" class="scroll-mt-4 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
             <div class="flex items-start gap-4 border-b border-amber-100 bg-amber-50 p-4 sm:p-6">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-amber-950" aria-hidden="true">−</span>
@@ -1734,8 +1766,9 @@ ENTRY_TEMPLATE = (
                 </div>
             </div>
         </section>
+        {% endif %}
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    {% if operation_page == 'entry' %}
     <script>
         (() => {
             const input = document.getElementById("article-photo");
@@ -1762,15 +1795,7 @@ ENTRY_TEMPLATE = (
             });
         })();
 
-        {% if start_exit_mode %}
-        window.addEventListener("load", () => {
-            document.getElementById("stock-exit").scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-            });
-            document.getElementById("exit-quantity").focus({ preventScroll: true });
-        });
-        {% elif start_entry_mode %}
+        {% if start_entry_mode %}
         window.addEventListener("load", () => {
             document.getElementById("existing-entry").scrollIntoView({
                 behavior: "smooth",
@@ -1778,14 +1803,11 @@ ENTRY_TEMPLATE = (
             });
             document.querySelector('#existing-entry input[name="qty"]').focus({ preventScroll: true });
         });
-        {% elif start_choice_mode %}
-        window.addEventListener("load", () => {
-            document.getElementById("operation-choice").scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-            });
-        });
         {% endif %}
+    </script>
+    {% else %}
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script>
 
         (() => {
             const startButton = document.getElementById("start-qr-scanner");
@@ -1925,6 +1947,7 @@ ENTRY_TEMPLATE = (
             window.addEventListener("pagehide", stopScanner);
         })();
     </script>
+    {% endif %}
 """
     + LAYOUT_FOOTER
 )
@@ -3578,6 +3601,18 @@ def stock_print_view():
 
 @app.route("/entry")
 def entry_form():
+  mode = request.args.get("mode", "")
+  if mode not in {"", "choose", "entry", "exit"}:
+    abort(400, description="Mode de mouvement invalide.")
+  if mode == "exit":
+    return redirect(
+        url_for(
+            "stock_exit",
+            article_id=request.args.get("article_id"),
+            site_id=request.args.get("site_id"),
+        )
+    )
+
   db = get_db()
   cur = db.cursor()
   cur.execute(
@@ -3610,12 +3645,19 @@ def entry_form():
       ),
       None,
   )
-  mode = request.args.get("mode", "")
-  if mode not in {"", "choose", "entry", "exit"}:
-    abort(400, description="Mode de mouvement invalide.")
+  if mode == "choose":
+    if selected_article is None:
+      abort(404, description="Article introuvable sur le site sélectionné.")
+    return render_template_string(
+        OPERATION_CHOICE_TEMPLATE,
+        active_page="entry",
+        selected_article=selected_article,
+        total_stock_value=total_val,
+    )
   return render_template_string(
       ENTRY_TEMPLATE,
       active_page="entry",
+      operation_page="entry",
       locations=locations,
       equipment=equipment,
       articles=articles,
@@ -3626,9 +3668,71 @@ def entry_form():
           item["id"] == preselected_article_id for item in articles
       ),
       selected_article=selected_article,
-      start_exit_mode=mode == "exit",
       start_entry_mode=mode == "entry",
-      start_choice_mode=mode == "choose",
+      search_query="",
+      search_results=[],
+  )
+
+
+@app.route("/exit")
+def stock_exit():
+  search_query = request.args.get("q", "").strip()
+  preselected_article_id = optional_integer(
+      request.args.get("article_id"), "article_id"
+  )
+  db = get_db()
+  cur = db.cursor()
+  article_query = """
+      SELECT a.*, COALESCE(l.name, equipment_location.name) AS loc_name
+      FROM articles a
+      LEFT JOIN locations l ON l.id = a.location_id
+      LEFT JOIN equipment e ON e.id = a.equipment_id
+      LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+      WHERE a.site_id = %s
+  """
+  article_params = [g.current_site["id"]]
+  if search_query:
+    for term in search_query.split():
+      escaped_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+      article_query += """
+          AND (a.name ILIKE %s ESCAPE '\\'
+               OR COALESCE(a.reference, '') ILIKE %s ESCAPE '\\')
+      """
+      article_params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
+  article_query += " ORDER BY a.name LIMIT 50"
+  cur.execute(article_query, article_params)
+  search_results = cur.fetchall() if search_query else []
+
+  cur.execute(
+      """
+          SELECT a.*, COALESCE(l.name, equipment_location.name) AS loc_name
+          FROM articles a
+          LEFT JOIN locations l ON l.id = a.location_id
+          LEFT JOIN equipment e ON e.id = a.equipment_id
+          LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
+          WHERE a.site_id = %s
+          ORDER BY a.name
+      """,
+      (g.current_site["id"],),
+  )
+  articles = cur.fetchall()
+  cur.close()
+  selected_article = next(
+      (item for item in articles if item["id"] == preselected_article_id),
+      None,
+  )
+  return render_template_string(
+      ENTRY_TEMPLATE,
+      active_page="exit",
+      operation_page="exit",
+      articles=articles,
+      total_stock_value=calculate_total_stock_value(),
+      preselected_article_id=preselected_article_id,
+      preselected_article_found=selected_article is not None,
+      selected_article=selected_article,
+      start_entry_mode=False,
+      search_query=search_query,
+      search_results=search_results,
   )
 
 
