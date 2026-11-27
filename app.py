@@ -85,6 +85,7 @@ APP_BASE_URL = os.environ.get(
 APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
+SITE_ENTITIES = ("Locaux tertiaires", "Locaux industriels")
 
 if not app.config["SECRET_KEY"]:
   raise RuntimeError("La variable d'environnement SECRET_KEY doit être définie.")
@@ -234,7 +235,7 @@ SITE_SELECT_TEMPLATE = """
                     <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div class="min-w-0">
                             <span class="block truncate text-sm font-bold text-slate-900">{{ item.name }}</span>
-                            <span class="mt-1 block text-xs text-slate-600">{{ item.site_name }} · Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.location_name %} · {{ item.location_name }}{% endif %}</span>
+                            <span class="mt-1 block text-xs text-slate-600">{{ item.site_entity }} · {{ item.site_name }} · Réf. : {{ item.reference or '—' }} · Stock : {{ item.quantity }}{% if item.location_name %} · {{ item.location_name }}{% endif %}</span>
                         </div>
                         <div class="flex shrink-0 gap-2">
                             <button type="submit" name="action" value="edit" class="min-h-11 flex-1 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-900 sm:flex-none">Ouvrir</button>
@@ -248,20 +249,32 @@ SITE_SELECT_TEMPLATE = """
             </div>
             {% endif %}
         </section>
+        {% for entity_name in ['Locaux tertiaires', 'Locaux industriels'] %}
+        {% set entity_sites = sites|selectattr('entity', 'equalto', entity_name)|list %}
+        {% if entity_sites %}
+        <section class="mb-5">
+        <h2 class="mb-3 text-sm font-bold uppercase tracking-wide text-emerald-900">{{ entity_name }}</h2>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {% for site in sites %}
+            {% for site in entity_sites %}
             <form method="POST" class="m-0">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="site_id" value="{{ site.id }}">
                 <button type="submit" class="flex min-h-32 w-full items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
-                    <span class="text-xl font-extrabold text-slate-900">{{ site.name }}</span>
+                    <span>
+                        <span class="block text-xs font-semibold uppercase tracking-wide text-emerald-800">{{ site.entity }}</span>
+                        <span class="mt-1 block text-xl font-extrabold text-slate-900">{{ site.name }}</span>
+                    </span>
                     <span class="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-900" aria-hidden="true">›</span>
                 </button>
             </form>
-            {% else %}
-            <p class="col-span-full rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">Aucun site n’est configuré. Contactez l’administrateur.</p>
             {% endfor %}
         </div>
+        </section>
+        {% endif %}
+        {% endfor %}
+        {% if not sites %}
+        <p class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">Aucun site n’est configuré. Contactez l’administrateur.</p>
+        {% endif %}
         <form action="{{ url_for('logout') }}" method="POST" class="mt-8 text-center">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="min-h-11 rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200">Se déconnecter</button>
@@ -1040,7 +1053,7 @@ def choose_site():
     cur.execute(
         """
             SELECT a.id, a.site_id, a.name, a.reference, a.quantity,
-                   s.name AS site_name,
+                   s.name AS site_name, s.entity AS site_entity,
                    COALESCE(l.name, equipment_location.name) AS location_name
             FROM articles a
             JOIN sites s ON s.id = a.site_id
@@ -1055,7 +1068,7 @@ def choose_site():
         params,
     )
     search_results = cur.fetchall()
-  cur.execute("SELECT id, name FROM sites ORDER BY name")
+  cur.execute("SELECT id, name, entity FROM sites ORDER BY entity, name")
   sites = cur.fetchall()
   cur.close()
   return render_template_string(
@@ -1107,7 +1120,10 @@ def init_db():
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS sites (
             id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE
+            name TEXT NOT NULL UNIQUE,
+            entity TEXT NOT NULL DEFAULT 'Locaux tertiaires',
+            CONSTRAINT sites_entity_check
+                CHECK (entity IN ('Locaux tertiaires', 'Locaux industriels'))
         );
         CREATE TABLE IF NOT EXISTS locations (
             id SERIAL PRIMARY KEY,
@@ -1161,6 +1177,23 @@ def init_db():
           INSERT INTO sites (name)
           VALUES ('HOTEL'), ('CAMPING'), ('MYR'), ('BERGERIE')
           ON CONFLICT (name) DO NOTHING;
+          ALTER TABLE sites
+              ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'Locaux tertiaires';
+          UPDATE sites
+          SET entity = 'Locaux tertiaires'
+          WHERE entity IS NULL OR entity NOT IN ('Locaux tertiaires', 'Locaux industriels');
+          DO $$
+          BEGIN
+              IF NOT EXISTS (
+                  SELECT 1 FROM pg_constraint
+                  WHERE conname = 'sites_entity_check'
+                    AND conrelid = 'sites'::regclass
+              ) THEN
+                  ALTER TABLE sites ADD CONSTRAINT sites_entity_check
+                      CHECK (entity IN ('Locaux tertiaires', 'Locaux industriels'));
+              END IF;
+          END;
+          $$;
           ALTER TABLE locations
               ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
           ALTER TABLE equipment
@@ -2905,8 +2938,8 @@ SETTINGS_TEMPLATE = (
     + """
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
-            <h1 class="text-base font-bold text-slate-900">{{ 'Réglages & Configuration' if section == 'home' else {'locations': 'Emplacements de stockage', 'equipment': 'Équipements & machines', 'users': 'Gestion des utilisateurs', 'connections': 'Connexions & historique'}[section] }}</h1>
-            <p class="text-xs text-slate-500">{% if section == 'home' %}Choisissez une rubrique à configurer.{% elif section == 'locations' %}Gérez les lieux de stockage du site {{ g.current_site.name }}.{% elif section == 'equipment' %}Gérez les équipements et leurs emplacements pour le site {{ g.current_site.name }}.{% elif section == 'connections' %}Consultez les sessions actives et les dernières connexions réussies.{% else %}Gérez les comptes et leurs accès à l’application.{% endif %}</p>
+            <h1 class="text-base font-bold text-slate-900">{{ 'Réglages & Configuration' if section == 'home' else {'sites': 'Gestion des sites', 'locations': 'Emplacements de stockage', 'equipment': 'Équipements & machines', 'users': 'Gestion des utilisateurs', 'connections': 'Connexions & historique'}[section] }}</h1>
+            <p class="text-xs text-slate-500">{% if section == 'home' %}Choisissez une rubrique à configurer.{% elif section == 'sites' %}Créez et modifiez les sites, puis classez-les par entité.{% elif section == 'locations' %}Gérez les lieux de stockage du site {{ g.current_site.name }}.{% elif section == 'equipment' %}Gérez les équipements et leurs emplacements pour le site {{ g.current_site.name }}.{% elif section == 'connections' %}Consultez les sessions actives et les dernières connexions réussies.{% else %}Gérez les comptes et leurs accès à l’application.{% endif %}</p>
         </div>
         {% for category, message in get_flashed_messages(with_categories=true) %}
         <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
@@ -2914,6 +2947,11 @@ SETTINGS_TEMPLATE = (
 
         {% if section == 'home' %}
         <nav class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Rubriques des réglages">
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('settings_view', section='sites') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
+                <span class="text-3xl" aria-hidden="true">🏢</span><span><strong class="block text-base text-slate-900">Gestion des sites</strong><span class="mt-1 block text-sm text-slate-500">Ajouter ou modifier les sites et leur entité.</span></span>
+            </a>
+            {% endif %}
             <a href="{{ url_for('settings_view', section='locations') }}" class="flex min-h-40 flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-200">
                 <span class="text-3xl" aria-hidden="true">📍</span><span><strong class="block text-base text-slate-900">Emplacements de stockage</strong><span class="mt-1 block text-sm text-slate-500">Créer, renommer ou supprimer les lieux.</span></span>
             </a>
@@ -2943,6 +2981,47 @@ SETTINGS_TEMPLATE = (
         </section>
         {% else %}
         <a href="{{ url_for('settings_view') }}" class="inline-flex min-h-10 items-center text-sm font-semibold text-emerald-900 hover:underline">← Retour aux réglages</a>
+        {% endif %}
+
+        {% if section == 'sites' and current_user.role == 'admin' %}
+        <section class="space-y-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800">Ajouter un site</h2>
+                <form action="{{ url_for('add_site') }}" method="POST" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <label class="sr-only" for="new-site-name">Nom du site</label>
+                    <input id="new-site-name" type="text" name="name" required maxlength="100" placeholder="Nom du site" class="min-h-11 rounded border border-slate-300 px-3 text-sm focus:border-emerald-700 focus:outline-none">
+                    <label class="sr-only" for="new-site-entity">Entité</label>
+                    <select id="new-site-entity" name="entity" required class="min-h-11 rounded border border-slate-300 bg-white px-3 text-sm">
+                        {% for entity in site_entities %}<option value="{{ entity }}">{{ entity }}</option>{% endfor %}
+                    </select>
+                    <button type="submit" class="min-h-11 rounded bg-forest px-4 py-2 text-sm font-semibold text-white hover:bg-forest-light">Ajouter le site</button>
+                </form>
+            </div>
+            {% for entity in site_entities %}
+            <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-200 bg-slate-50 px-5 py-3">
+                    <h2 class="text-sm font-bold text-slate-900">{{ entity }}</h2>
+                </div>
+                <div class="divide-y divide-slate-100">
+                    {% for site in sites if site.entity == entity %}
+                    <form action="{{ url_for('edit_site', site_id=site.id) }}" method="POST" class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto] sm:items-center">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <label class="sr-only" for="site-name-{{ site.id }}">Nom de {{ site.name }}</label>
+                        <input id="site-name-{{ site.id }}" type="text" name="name" value="{{ site.name }}" required maxlength="100" class="min-h-11 rounded border border-slate-300 px-3 text-sm font-semibold focus:border-emerald-700 focus:outline-none">
+                        <label class="sr-only" for="site-entity-{{ site.id }}">Entité de {{ site.name }}</label>
+                        <select id="site-entity-{{ site.id }}" name="entity" required class="min-h-11 rounded border border-slate-300 bg-white px-3 text-sm">
+                            {% for option in site_entities %}<option value="{{ option }}" {% if site.entity == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                        </select>
+                        <button type="submit" class="min-h-11 rounded border border-emerald-200 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-50">Enregistrer</button>
+                    </form>
+                    {% else %}
+                    <p class="p-4 text-sm italic text-slate-500">Aucun site dans cette entité.</p>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </section>
         {% endif %}
 
         {% if section == 'locations' %}
@@ -4400,9 +4479,9 @@ def edit_article(id):
 @app.route("/settings")
 def settings_view():
   section = request.args.get("section", "home")
-  if section not in {"home", "locations", "equipment", "users", "connections"}:
+  if section not in {"home", "sites", "locations", "equipment", "users", "connections"}:
     abort(404)
-  if section in {"users", "connections"}:
+  if section in {"sites", "users", "connections"}:
     require_admin()
 
   db = get_db()
@@ -4410,8 +4489,12 @@ def settings_view():
   locations = []
   equipment = []
   users = []
+  sites = []
   active_sessions = []
   login_history = []
+  if section == "sites":
+    cur.execute("SELECT id, name, entity FROM sites ORDER BY entity, name")
+    sites = cur.fetchall()
   if section in {"locations", "equipment"}:
     cur.execute(
         "SELECT * FROM locations WHERE site_id = %s ORDER BY name",
@@ -4461,12 +4544,71 @@ def settings_view():
       locations=locations,
       equipment=equipment,
       users=users,
+      sites=sites,
+      site_entities=SITE_ENTITIES,
       active_sessions=active_sessions,
       login_history=login_history,
       current_user=g.current_user,
       total_stock_value=total_val,
       mail_sending_enabled=mail_sending_enabled(),
   )
+
+
+def validate_site_form():
+  name = request.form.get("name", "").strip()
+  entity = request.form.get("entity", "")
+  if not name or len(name) > 100:
+    abort(400, description="Le nom du site doit contenir de 1 à 100 caractères.")
+  if entity not in SITE_ENTITIES:
+    abort(400, description="L’entité sélectionnée est invalide.")
+  return name, entity
+
+
+@app.route("/sites/add", methods=["POST"])
+def add_site():
+  require_admin()
+  name, entity = validate_site_form()
+  db = get_db()
+  cur = db.cursor()
+  try:
+    cur.execute(
+        "INSERT INTO sites (name, entity) VALUES (%s, %s)",
+        (name, entity),
+    )
+  except psycopg.errors.UniqueViolation:
+    db.rollback()
+    cur.close()
+    flash(f"Un site nommé « {name} » existe déjà.", "error")
+    return redirect(url_for("settings_view", section="sites"))
+  db.commit()
+  cur.close()
+  flash(f"Le site « {name} » a été ajouté à l’entité « {entity} ».", "success")
+  return redirect(url_for("settings_view", section="sites"))
+
+
+@app.route("/sites/<int:site_id>/edit", methods=["POST"])
+def edit_site(site_id):
+  require_admin()
+  name, entity = validate_site_form()
+  db = get_db()
+  cur = db.cursor()
+  try:
+    cur.execute(
+        "UPDATE sites SET name = %s, entity = %s WHERE id = %s",
+        (name, entity, site_id),
+    )
+  except psycopg.errors.UniqueViolation:
+    db.rollback()
+    cur.close()
+    flash(f"Un autre site nommé « {name} » existe déjà.", "error")
+    return redirect(url_for("settings_view", section="sites"))
+  if cur.rowcount == 0:
+    cur.close()
+    abort(404)
+  db.commit()
+  cur.close()
+  flash(f"Le site « {name} » a été modifié.", "success")
+  return redirect(url_for("settings_view", section="sites"))
 
 
 @app.route("/users/add", methods=["POST"])
