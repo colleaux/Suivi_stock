@@ -1060,7 +1060,7 @@ def choose_site():
             LEFT JOIN locations l ON l.id = a.location_id
             LEFT JOIN equipment e ON e.id = a.equipment_id
             LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
-            WHERE
+            WHERE a.archived_at IS NULL AND
         """ + " AND ".join(conditions) + """
             ORDER BY s.name, a.name, a.id
             LIMIT 50
@@ -1147,7 +1147,10 @@ def init_db():
             entry_date DATE,
             location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
             equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
-            image_filename TEXT
+            image_filename TEXT,
+            archived_at TIMESTAMPTZ,
+            CONSTRAINT articles_archived_stock_zero
+                CHECK (archived_at IS NULL OR quantity = 0)
         );
         CREATE TABLE IF NOT EXISTS movements (
             id SERIAL PRIMARY KEY,
@@ -1200,6 +1203,20 @@ def init_db():
               ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
           ALTER TABLE articles
               ADD COLUMN IF NOT EXISTS site_id INTEGER REFERENCES sites(id) ON DELETE RESTRICT;
+          ALTER TABLE articles
+              ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+          DO $$
+          BEGIN
+              IF NOT EXISTS (
+                  SELECT 1 FROM pg_constraint
+                  WHERE conname = 'articles_archived_stock_zero'
+                    AND conrelid = 'articles'::regclass
+              ) THEN
+                  ALTER TABLE articles ADD CONSTRAINT articles_archived_stock_zero
+                      CHECK (archived_at IS NULL OR quantity = 0);
+              END IF;
+          END;
+          $$;
           UPDATE locations
           SET site_id = (SELECT id FROM sites WHERE name = 'HOTEL')
           WHERE site_id IS NULL;
@@ -2084,6 +2101,9 @@ STOCK_TEMPLATE = (
     LAYOUT_HEADER
     + """
     <div class="space-y-6">
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+        <p role="status" class="rounded p-3 text-sm {% if category == 'error' %}bg-rose-50 text-rose-800{% else %}bg-emerald-50 text-emerald-800{% endif %}">{{ message }}</p>
+        {% endfor %}
         <div class="bg-forest text-white rounded-lg p-4 sm:p-5 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-emerald-900">
             <div>
                 <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-200">Valeur totale de l'inventaire</span>
@@ -2116,8 +2136,9 @@ STOCK_TEMPLATE = (
                     {% endfor %}
                 </select>
                 <select name="stock_status" aria-label="Filtrer par disponibilité" class="text-xs p-2 border border-slate-300 rounded bg-white">
-                    <option value="" {% if current_stock_status != 'out' %}selected{% endif %}>Tous les stocks</option>
+                    <option value="" {% if current_stock_status == '' %}selected{% endif %}>Articles suivis</option>
                     <option value="out" {% if current_stock_status == 'out' %}selected{% endif %}>En rupture (quantité zéro)</option>
+                    <option value="archived" {% if current_stock_status == 'archived' %}selected{% endif %}>Articles archivés</option>
                 </select>
                 <div class="flex gap-2">
                     <button type="submit" class="flex-1 bg-forest text-white text-xs font-semibold py-2 rounded hover:bg-forest-light transition">Filtrer</button>
@@ -2128,8 +2149,8 @@ STOCK_TEMPLATE = (
             </form>
             {% if search_query or current_stock_status %}
             <p class="mt-3 text-xs text-slate-600" role="status" aria-live="polite">
-                {{ matched_article_count }} article(s) correspondant(s){% if search_query %} à « {{ search_query }} »{% endif %}{% if current_stock_status == 'out' %} en rupture{% endif %} —
-                <strong class="text-emerald-800">{{ in_stock_count }} article(s) disponible(s) en stock</strong>
+                {{ matched_article_count }} article(s){% if search_query %} correspondant(s) à « {{ search_query }} »{% endif %}{% if current_stock_status == 'out' %} en rupture{% elif current_stock_status == 'archived' %} archivé(s){% endif %}{% if current_stock_status != 'archived' %} —
+                <strong class="text-emerald-800">{{ in_stock_count }} article(s) disponible(s) en stock</strong>{% endif %}
             </p>
             {% endif %}
         </div>
@@ -2171,7 +2192,7 @@ STOCK_TEMPLATE = (
                         </thead>
                         <tbody class="divide-y divide-slate-200">
                             {% for item in group['items'] %}
-                            <tr class="{% if item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50/60{% endif %} transition">
+                            <tr class="{% if item.archived_at %}bg-slate-100{% elif item.quantity < item.min_threshold %}bg-rose-50/80 hover:bg-rose-100/80{% else %}hover:bg-slate-50/60{% endif %} transition">
                                 <td class="p-2 border-r border-slate-200">
                                     {% if item.image_filename %}
                                     <img
@@ -2188,7 +2209,9 @@ STOCK_TEMPLATE = (
                                     {% endif %}
                                 </td>
                                 <td class="p-2.5 font-bold border-r border-slate-200">
-                                    {% if item.quantity == 0 %}
+                                    {% if item.archived_at %}
+                                    <span class="px-2 py-0.5 rounded text-[9px] bg-slate-300 text-slate-800 font-bold uppercase">ARCHIVÉ</span>
+                                    {% elif item.quantity == 0 %}
                                     <span class="px-2 py-0.5 rounded text-[9px] bg-slate-200 text-slate-800 font-bold uppercase">RUPTURE</span>
                                     {% elif item.quantity < item.min_threshold %}
                                     <span class="px-2 py-0.5 rounded text-[9px] bg-rose-200 text-rose-900 font-bold uppercase">RECOMMANDER</span>
@@ -2214,6 +2237,12 @@ STOCK_TEMPLATE = (
                                 <td class="p-2.5 text-right font-bold text-slate-900 font-mono border-r border-slate-200">{{ "%.2f"|format(item.quantity * item.price) }} €</td>
                                 <td class="p-2.5 text-center no-print">
                                     <div class="flex items-center justify-center gap-1.5">
+                                        {% if item.archived_at %}
+                                        <form action="{{ url_for('reactivate_article', id=item.id) }}" method="POST" class="inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="text-emerald-800 hover:underline font-semibold text-xs">Réactiver</button>
+                                        </form>
+                                        {% else %}
                                         <a href="/edit/{{ item.id }}" class="text-emerald-800 hover:underline font-semibold text-xs">✏️ Modif</a>
                                         <form action="/update/{{ item.id }}" method="POST" class="inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -2225,6 +2254,13 @@ STOCK_TEMPLATE = (
                                             <input type="hidden" name="action" value="plus">
                                             <button type="submit" class="w-5 h-5 bg-slate-200 hover:bg-slate-300 rounded font-bold text-slate-700 text-xs">+</button>
                                         </form>
+                                        {% if item.quantity == 0 %}
+                                        <form action="{{ url_for('archive_article', id=item.id) }}" method="POST" onsubmit="return confirm('Archiver cet article ? Il ne figurera plus dans le stock courant et ne sera pas recommandé. Son historique sera conservé.');" class="inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="text-slate-700 hover:underline text-xs">Ne plus suivre</button>
+                                        </form>
+                                        {% endif %}
+                                        {% endif %}
                                         <form action="/delete/{{ item.id }}" method="POST" onsubmit="return confirm('Supprimer cet article ?');" class="inline ml-1">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="text-rose-600 hover:underline text-xs">Suppr</button>
@@ -3238,7 +3274,7 @@ def calculate_total_stock_value():
       """
           SELECT COALESCE(SUM(quantity * COALESCE(price, 0)), 0) AS total
           FROM articles
-          WHERE site_id = %s
+          WHERE site_id = %s AND archived_at IS NULL
       """,
       (g.current_site["id"],),
   )
@@ -3699,7 +3735,7 @@ def home():
           SELECT COUNT(*) AS article_count,
                  COUNT(*) FILTER (WHERE quantity = 0) AS out_of_stock_count
           FROM articles
-          WHERE site_id = %s
+          WHERE site_id = %s AND archived_at IS NULL
       """,
       (g.current_site["id"],),
   )
@@ -3732,7 +3768,7 @@ def stock_print_view():
       LEFT JOIN locations l ON a.location_id = l.id
       LEFT JOIN equipment e ON a.equipment_id = e.id
       LEFT JOIN locations equipment_location ON e.location_id = equipment_location.id
-      WHERE a.site_id = %s
+      WHERE a.site_id = %s AND a.archived_at IS NULL
   """
   params = [g.current_site["id"]]
   if location_id:
@@ -3800,7 +3836,7 @@ def entry_form():
   equipment = cur.fetchall()
   cur.execute(
       "SELECT a.*, l.name as loc_name FROM articles a LEFT JOIN locations l ON"
-      " a.location_id = l.id WHERE a.site_id = %s ORDER BY a.name",
+      " a.location_id = l.id WHERE a.site_id = %s AND a.archived_at IS NULL ORDER BY a.name",
       (g.current_site["id"],),
   )
   articles = cur.fetchall()
@@ -3887,7 +3923,7 @@ def stock_exit():
       LEFT JOIN locations l ON l.id = a.location_id
       LEFT JOIN equipment e ON e.id = a.equipment_id
       LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
-      WHERE a.site_id = %s
+      WHERE a.site_id = %s AND a.archived_at IS NULL
   """
   article_params = [g.current_site["id"]]
   if exit_method == "location" and current_location_id:
@@ -3933,7 +3969,7 @@ def stock_exit():
             LEFT JOIN locations l ON l.id = a.location_id
             LEFT JOIN equipment e ON e.id = a.equipment_id
             LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
-            WHERE a.id = %s AND a.site_id = %s
+            WHERE a.id = %s AND a.site_id = %s AND a.archived_at IS NULL
         """,
         (preselected_article_id, g.current_site["id"]),
     )
@@ -3980,7 +4016,7 @@ def stock_view():
   loc_filter = optional_integer(request.args.get("loc_filter"), "loc_filter")
   eq_filter = optional_integer(request.args.get("eq_filter"), "eq_filter")
   stock_status = request.args.get("stock_status", "")
-  if stock_status not in {"", "out"}:
+  if stock_status not in {"", "out", "archived"}:
     abort(400, description="Filtre de disponibilité invalide.")
 
   query = """
@@ -3992,6 +4028,11 @@ def stock_view():
         WHERE a.site_id = %s
     """
   params = [g.current_site["id"]]
+  query += (
+      " AND a.archived_at IS NOT NULL"
+      if stock_status == "archived"
+      else " AND a.archived_at IS NULL"
+  )
 
   if search_query:
     search_terms = search_query.split()
@@ -4020,7 +4061,7 @@ def stock_view():
   if not session.get(rupture_popup_key):
     cur = db.cursor()
     cur.execute(
-        "SELECT COUNT(*) AS count FROM articles WHERE site_id = %s AND quantity = 0",
+        "SELECT COUNT(*) AS count FROM articles WHERE site_id = %s AND quantity = 0 AND archived_at IS NULL",
         (g.current_site["id"],),
     )
     rupture_count = cur.fetchone()["count"]
@@ -4029,7 +4070,7 @@ def stock_view():
           SELECT a.name, a.reference, COALESCE(l.name, 'Non assigné') AS loc_name
           FROM articles a
           LEFT JOIN locations l ON a.location_id = l.id
-          WHERE a.site_id = %s AND a.quantity = 0
+          WHERE a.site_id = %s AND a.quantity = 0 AND a.archived_at IS NULL
           ORDER BY a.name ASC
           LIMIT 50
       """, (g.current_site["id"],))
@@ -4237,8 +4278,9 @@ def monthly_close():
       LEFT JOIN equipment e ON e.id = a.equipment_id
       LEFT JOIN locations equipment_location ON equipment_location.id = e.location_id
       WHERE a.site_id = %s
+        AND (a.archived_at IS NULL OR a.archived_at >= %s)
       ORDER BY COALESCE(l.name, equipment_location.name, 'Non assigné'), a.name
-  """, (period_start, g.current_site["id"]))
+  """, (period_start, g.current_site["id"], period_end))
   articles = cur.fetchall()
   cur.execute(
       "SELECT COUNT(*) AS count FROM movements WHERE article_id IS NULL AND date < %s",
@@ -4265,10 +4307,14 @@ def monthly_close():
              ) AS has_invalid_movement
       FROM movements
       WHERE article_id IS NOT NULL
-        AND article_id IN (SELECT id FROM articles WHERE site_id = %s)
+        AND article_id IN (
+            SELECT id FROM articles
+            WHERE site_id = %s
+              AND (archived_at IS NULL OR archived_at >= %s)
+        )
         AND (date <= CURRENT_TIMESTAMP OR date IS NULL)
       GROUP BY article_id
-  """, (g.current_site["id"],))
+  """, (g.current_site["id"], period_end))
   movement_summaries = {
       summary["article_id"]: summary for summary in cur.fetchall()
   }
@@ -4282,10 +4328,14 @@ def monthly_close():
       SELECT article_id, type, quantity, unit_price,
              unit_price_estimated, date
       FROM movements
-      WHERE article_id IN (SELECT id FROM articles WHERE site_id = %s)
+      WHERE article_id IN (
+          SELECT id FROM articles
+          WHERE site_id = %s
+            AND (archived_at IS NULL OR archived_at >= %s)
+      )
         AND date <= CURRENT_TIMESTAMP
       ORDER BY article_id, date, id
-  """, (g.current_site["id"],))
+  """, (g.current_site["id"], period_end))
   monthly_close_rows, totals = build_monthly_close_rows(
       articles,
       movement_cur,
@@ -4373,7 +4423,7 @@ def edit_article(id):
     validate_site_assignment(cur, "equipment", equipment_id, "L’équipement")
 
     cur.execute(
-        "SELECT quantity, price FROM articles WHERE id = %s AND site_id = %s FOR UPDATE",
+        "SELECT quantity, price FROM articles WHERE id = %s AND site_id = %s AND archived_at IS NULL FOR UPDATE",
         (id, g.current_site["id"]),
     )
     article = cur.fetchone()
@@ -4386,7 +4436,7 @@ def edit_article(id):
           """
               UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
               is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
-              equipment_id=%s, image_filename=%s WHERE id=%s AND site_id=%s
+              equipment_id=%s, image_filename=%s WHERE id=%s AND site_id=%s AND archived_at IS NULL
           """,
           (
               name, reference, quantity, min_threshold, price, is_estimated_price,
@@ -4399,7 +4449,7 @@ def edit_article(id):
           """
               UPDATE articles SET name=%s, reference=%s, quantity=%s, min_threshold=%s, price=%s,
               is_estimated_price=%s, supplier=%s, invoice_number=%s, entry_date=%s, location_id=%s,
-              equipment_id=%s WHERE id=%s AND site_id=%s
+              equipment_id=%s WHERE id=%s AND site_id=%s AND archived_at IS NULL
           """,
           (
               name, reference, quantity, min_threshold, price, is_estimated_price,
@@ -4432,7 +4482,7 @@ def edit_article(id):
     return redirect(url_for("edit_article", id=id))
 
   cur.execute(
-      "SELECT * FROM articles WHERE id = %s AND site_id = %s",
+      "SELECT * FROM articles WHERE id = %s AND site_id = %s AND archived_at IS NULL",
       (id, g.current_site["id"]),
   )
   article = cur.fetchone()
@@ -5052,7 +5102,7 @@ def movement_entry():
               is_estimated_price = 0,
               supplier = COALESCE(%s, supplier),
               invoice_number = %s
-          WHERE id = %s AND site_id = %s
+          WHERE id = %s AND site_id = %s AND archived_at IS NULL
           RETURNING id
       """,
       (qty, price, supplier, invoice_number, article_id, g.current_site["id"]),
@@ -5089,7 +5139,7 @@ def movement_exit():
   cur.execute(
       """
           UPDATE articles SET quantity = quantity - %s
-          WHERE id = %s AND site_id = %s AND quantity >= %s
+          WHERE id = %s AND site_id = %s AND archived_at IS NULL AND quantity >= %s
           RETURNING id, price, is_estimated_price
       """,
       (qty, article_id, g.current_site["id"], qty),
@@ -5128,7 +5178,7 @@ def update_quantity(id):
   if action not in {"plus", "minus"}:
     abort(400, description="Action de mise à jour invalide.")
   cur.execute(
-      "SELECT quantity, price, is_estimated_price FROM articles WHERE id = %s AND site_id = %s FOR UPDATE",
+      "SELECT quantity, price, is_estimated_price FROM articles WHERE id = %s AND site_id = %s AND archived_at IS NULL FOR UPDATE",
       (id, g.current_site["id"]),
   )
   item = cur.fetchone()
@@ -5139,7 +5189,7 @@ def update_quantity(id):
     abort(400, description="Le stock est déjà à zéro.")
   delta = 1 if action == "plus" else -1
   cur.execute(
-      "UPDATE articles SET quantity = quantity + %s WHERE id = %s AND site_id = %s",
+      "UPDATE articles SET quantity = quantity + %s WHERE id = %s AND site_id = %s AND archived_at IS NULL",
       (delta, id, g.current_site["id"]),
   )
   cur.execute(
@@ -5160,6 +5210,77 @@ def update_quantity(id):
   )
   db.commit()
   cur.close()
+  return redirect(url_for("stock_view"))
+
+
+@app.route("/archive/<int:id>", methods=["POST"])
+def archive_article(id):
+  db = get_db()
+  cur = db.cursor()
+  cur.execute(
+      """
+          SELECT name, quantity, archived_at
+          FROM articles
+          WHERE id = %s AND site_id = %s
+          FOR UPDATE
+      """,
+      (id, g.current_site["id"]),
+  )
+  article = cur.fetchone()
+  if article is None:
+    cur.close()
+    abort(404)
+  if article["archived_at"] is not None:
+    db.rollback()
+    cur.close()
+    flash(f"« {article['name']} » est déjà archivé.", "error")
+    return redirect(url_for("stock_view", stock_status="archived"))
+  if article["quantity"] != 0:
+    db.rollback()
+    cur.close()
+    flash(
+        f"« {article['name']} » doit avoir un stock nul avant de pouvoir être archivé.",
+        "error",
+    )
+    return redirect(url_for("stock_view"))
+
+  cur.execute(
+      """
+          UPDATE articles
+          SET archived_at = CURRENT_TIMESTAMP
+          WHERE id = %s AND site_id = %s AND archived_at IS NULL
+      """,
+      (id, g.current_site["id"]),
+  )
+  db.commit()
+  cur.close()
+  flash(
+      f"« {article['name']} » est archivé. Son historique est conservé.",
+      "success",
+  )
+  return redirect(url_for("stock_view", stock_status="archived"))
+
+
+@app.route("/reactivate/<int:id>", methods=["POST"])
+def reactivate_article(id):
+  db = get_db()
+  cur = db.cursor()
+  cur.execute(
+      """
+          UPDATE articles
+          SET archived_at = NULL
+          WHERE id = %s AND site_id = %s AND archived_at IS NOT NULL
+          RETURNING name
+      """,
+      (id, g.current_site["id"]),
+  )
+  article = cur.fetchone()
+  if article is None:
+    cur.close()
+    abort(404)
+  db.commit()
+  cur.close()
+  flash(f"« {article['name']} » est de nouveau suivi dans le stock.", "success")
   return redirect(url_for("stock_view"))
 
 
@@ -5187,7 +5308,7 @@ def article_relocate(id):
           LEFT JOIN locations source_location ON source_location.id = a.location_id
           LEFT JOIN locations equipment_location
               ON equipment_location.id = source_equipment.location_id
-          WHERE a.id = %s AND a.site_id = %s
+          WHERE a.id = %s AND a.site_id = %s AND a.archived_at IS NULL
           FOR UPDATE OF a
       """,
       (id, g.current_site["id"]),
@@ -5249,6 +5370,7 @@ def article_relocate(id):
           FROM articles a
           LEFT JOIN equipment e ON e.id = a.equipment_id
           WHERE a.site_id = %s
+            AND a.archived_at IS NULL
             AND LOWER(a.name) = LOWER(%s)
             AND a.reference IS NOT DISTINCT FROM %s
             AND COALESCE(a.location_id, e.location_id)
